@@ -1,4 +1,8 @@
+import { zipSync, Zippable } from 'fflate';
 import { ImageEntry, UIToCode, CodeToUI, PluginState } from './types';
+
+// Accumulates PNG files during an export run; flushed to ZIP on exportDone
+const pendingZipFiles: Zippable = {};
 
 // ── SVG icons ────────────────────────────────────────────────────────────────
 
@@ -65,7 +69,7 @@ window.onmessage = (event: MessageEvent) => {
       applyState(msg);
       break;
     case 'exportFile':
-      downloadFile(msg.fileName, msg.bytes);
+      pendingZipFiles[msg.fileName] = new Uint8Array(msg.bytes);
       break;
     case 'exportDone':
       onExportDone(msg.exported, msg.failed);
@@ -257,29 +261,41 @@ function renderFooter(): void {
 
 // ── Export / download ─────────────────────────────────────────────────────────
 
-function downloadFile(fileName: string, bytes: number[]): void {
-  const blob = new Blob([new Uint8Array(bytes)], { type: 'image/png' });
-  const url = URL.createObjectURL(blob);
+function downloadZip(zipBytes: Uint8Array, fileName: string): void {
+  // Use data URI — more reliable than blob URLs in Figma desktop's Electron webview
+  let binary = '';
+  for (let i = 0; i < zipBytes.length; i++) {
+    binary += String.fromCharCode(zipBytes[i]);
+  }
+  const dataUri = `data:application/zip;base64,${btoa(binary)}`;
   const a = document.createElement('a');
-  a.href = url;
+  a.href = dataUri;
   a.download = fileName;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function onExportDone(exported: number, failed: number): void {
-  renderFooter(); // restore button text
-  exportBtn.disabled = state.currentPageCount === 0;
+  if (exported > 0) {
+    const zipBytes = zipSync(pendingZipFiles, { level: 0 }); // level 0 = store, PNGs don't compress
+    downloadZip(zipBytes, 'images.zip');
+  }
 
+  // Clear accumulator for next run
+  for (const key of Object.keys(pendingZipFiles)) {
+    delete pendingZipFiles[key];
+  }
+
+  renderFooter();
+  exportBtn.disabled = state.currentPageCount === 0;
   exportStatus.classList.remove('hidden', 'success', 'warning');
 
   if (failed > 0) {
     exportStatus.textContent = `Done — ${exported} exported, ${failed} failed`;
     exportStatus.classList.add('warning');
   } else {
-    exportStatus.textContent = `${exported} image${exported !== 1 ? 's' : ''} saved to Downloads`;
+    exportStatus.textContent = `${exported} image${exported !== 1 ? 's' : ''} saved as images.zip`;
     exportStatus.classList.add('success');
   }
 
@@ -311,6 +327,8 @@ searchInput.addEventListener('input', () => {
 });
 
 exportBtn.addEventListener('click', () => {
+  // Clear any leftover files from a previous interrupted run
+  for (const key of Object.keys(pendingZipFiles)) delete pendingZipFiles[key];
   exportBtn.disabled = true;
   exportBtn.textContent = 'Exporting…';
   exportStatus.classList.add('hidden');
