@@ -243,6 +243,8 @@
 
     .btn-export:hover:not(:disabled) { background: #3a3a3a; }
 
+    .btn-export + .btn-export { margin-top: 6px; }
+
     .export-status {
       font-size: 11px;
       text-align: center;
@@ -252,6 +254,17 @@
 
     .export-status.success { color: #16a34a; }
     .export-status.warning { color: #ea580c; }
+    .export-status.error {
+      color: #d93025;
+      text-align: left;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 10.5px;
+      line-height: 1.4;
+      max-height: 180px;
+      overflow-y: auto;
+    }
 
     /* ── Utilities ────────────────────────────────────────────────── */
 
@@ -298,6 +311,7 @@
 
   <!-- Footer -->
   <div class="footer">
+    <button class="btn btn-export" id="export-page-btn">Export page (img_exp/)</button>
     <button class="btn btn-export" id="export-btn" disabled>No images on this page</button>
     <div class="export-status hidden" id="export-status"></div>
   </div>

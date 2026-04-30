@@ -115,6 +115,15 @@ function sanitizeName(name: string): string {
   return s || 'image';
 }
 
+/**
+ * Stricter sanitization for page-export mode: only [A-Za-z0-9] preserved.
+ * Used for both image names and folder names in the hierarchical output.
+ */
+function sanitizePagePart(name: string): string {
+  const s = name.replace(/[^A-Za-z0-9]/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '');
+  return s || 'unnamed';
+}
+
 // ── Dark mode detection ───────────────────────────────────────────────────────
 
 interface DarkModeInfo {
@@ -230,64 +239,249 @@ function sendFile(path: string, bytes: Uint8Array): void {
   figma.ui.postMessage({ type: 'exportFile', fileName: path, bytes: Array.from(bytes) } as CodeToUI);
 }
 
-// ── Export one node as imageset ───────────────────────────────────────────────
+// ── PNG header parsing & size validation ─────────────────────────────────────
 
-async function exportImageset(node: SceneNode, imageName: string): Promise<void> {
-  const safe = sanitizeName(imageName);
-  const dir  = `${safe}.imageset/`;
+/** Read width/height from a PNG's IHDR chunk (offsets 16/20, big-endian uint32). */
+function readPngDims(bytes: Uint8Array): { width: number; height: number } {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  return { width: view.getUint32(16), height: view.getUint32(20) };
+}
 
-  // ── Light variants ────────────────────────────────────────────────────────
-  const light1x = await node.exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: 1 } });
-  const light2x = await node.exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: 2 } });
+interface ImagesetBuffer {
+  imageName: string;       // sanitized name used in filenames
+  dir: string;             // ZIP folder including trailing '/'
+  light1x: Uint8Array;
+  light2x: Uint8Array;
+  dark1x: Uint8Array | null;
+  dark2x: Uint8Array | null;
+  lightPath: string;       // human-readable hierarchy path for error messages
+  darkPath: string | null; // null when dark came from variable-swap (clone of light)
+}
 
-  // ── Dark variants via clone ───────────────────────────────────────────────
-  let dark1x: Uint8Array | null = null;
-  let dark2x: Uint8Array | null = null;
+/**
+ * Returns a list of human-readable error messages (empty if all sizes are valid).
+ * Each PNG must satisfy: 2x dims === 1x dims × 2; light dims === dark dims.
+ */
+function validateImagesetSizes(b: ImagesetBuffer): string[] {
+  const errors: string[] = [];
+  const l1 = readPngDims(b.light1x);
+  const l2 = readPngDims(b.light2x);
 
-  const darkCollection = findDarkModeCollection();
-  const usesNamedDark  = hasDarkPrefixVariables();
+  if (l2.width !== l1.width * 2 || l2.height !== l1.height * 2) {
+    errors.push(
+      `  ${b.lightPath} (light): 1x is ${l1.width}×${l1.height}, ` +
+      `2x is ${l2.width}×${l2.height} (expected ${l1.width * 2}×${l1.height * 2})`,
+    );
+  }
 
-  if ((darkCollection || usesNamedDark) && 'clone' in node) {
-    const clone = (node as SceneNode & { clone(): SceneNode }).clone();
-    try {
-      let darkReady = false;
+  if (b.dark1x && b.dark2x) {
+    const d1 = readPngDims(b.dark1x);
+    const d2 = readPngDims(b.dark2x);
+    const darkLabel = b.darkPath ? `${b.darkPath} (dark)` : `${b.lightPath} (dark variant)`;
 
-      if (darkCollection && 'setExplicitVariableModeForCollection' in clone) {
-        // Approach A — switch the collection to its Dark mode
-        (clone as FrameNode).setExplicitVariableModeForCollection(
-          darkCollection.collection,
-          darkCollection.darkModeId,
-        );
-        darkReady = true;
-      } else if (usesNamedDark) {
-        // Approach B — swap Light/… → Dark/… colour bindings in place on the clone
-        darkReady = applyDarkBindings(clone);
-      }
-
-      if (darkReady) {
-        const d1x = await clone.exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: 1 } });
-        const d2x = await clone.exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: 2 } });
-        // Only treat as real dark if the pixels actually differ
-        if (!bytesEqual(light1x, d1x)) {
-          dark1x = d1x;
-          dark2x = d2x;
-        }
-      }
-    } finally {
-      clone.remove();
+    if (d2.width !== d1.width * 2 || d2.height !== d1.height * 2) {
+      errors.push(
+        `  ${darkLabel}: 1x is ${d1.width}×${d1.height}, ` +
+        `2x is ${d2.width}×${d2.height} (expected ${d1.width * 2}×${d1.height * 2})`,
+      );
+    }
+    if (d1.width !== l1.width || d1.height !== l1.height) {
+      errors.push(
+        `  ${b.lightPath}: light is ${l1.width}×${l1.height} but dark is ${d1.width}×${d1.height}` +
+        (b.darkPath ? ` (dark from ${b.darkPath})` : ''),
+      );
     }
   }
 
-  // ── Emit files ────────────────────────────────────────────────────────────
-  const hasDark = dark1x !== null;
+  return errors;
+}
 
-  sendFile(dir + `${safe}.png`,    light1x);
-  sendFile(dir + `${safe}@2x.png`, light2x);
+function emitImageset(b: ImagesetBuffer): void {
+  const safe = b.imageName;
+  const dir  = b.dir;
+  sendFile(dir + `${safe}.png`,    b.light1x);
+  sendFile(dir + `${safe}@2x.png`, b.light2x);
+  const hasDark = b.dark1x !== null;
   if (hasDark) {
-    sendFile(dir + `${safe}~dark.png`,    dark1x!);
-    sendFile(dir + `${safe}~dark@2x.png`, dark2x!);
+    sendFile(dir + `${safe}~dark.png`,    b.dark1x!);
+    sendFile(dir + `${safe}~dark@2x.png`, b.dark2x!);
   }
   sendFile(dir + 'Contents.json', buildContentsJson(safe, hasDark));
+}
+
+// ── Dark variant via variable-swap (shared by both export modes) ─────────────
+
+/**
+ * Render a node's dark variant by cloning, switching its variable bindings to
+ * dark, exporting, and removing the clone. Returns null if the file has no
+ * dark variables at all OR if the dark render is bit-identical to the light.
+ */
+async function renderDarkViaVariables(
+  node: SceneNode,
+  light1x: Uint8Array,
+): Promise<{ dark1x: Uint8Array; dark2x: Uint8Array } | null> {
+  const darkCollection = findDarkModeCollection();
+  const usesNamedDark  = hasDarkPrefixVariables();
+
+  if ((!darkCollection && !usesNamedDark) || !('clone' in node)) return null;
+
+  const clone = (node as SceneNode & { clone(): SceneNode }).clone();
+  try {
+    let darkReady = false;
+
+    if (darkCollection && 'setExplicitVariableModeForCollection' in clone) {
+      (clone as FrameNode).setExplicitVariableModeForCollection(
+        darkCollection.collection,
+        darkCollection.darkModeId,
+      );
+      darkReady = true;
+    } else if (usesNamedDark) {
+      darkReady = applyDarkBindings(clone);
+    }
+
+    if (!darkReady) return null;
+
+    const d1x = await clone.exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: 1 } });
+    const d2x = await clone.exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: 2 } });
+    if (bytesEqual(light1x, d1x)) return null;
+
+    return { dark1x: d1x, dark2x: d2x };
+  } finally {
+    clone.remove();
+  }
+}
+
+// ── Build one imageset (tagged mode — flat output) ───────────────────────────
+
+async function buildTaggedImageset(node: SceneNode, imageName: string): Promise<ImagesetBuffer> {
+  const safe = sanitizeName(imageName);
+  const light1x = await node.exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: 1 } });
+  const light2x = await node.exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: 2 } });
+  const dark = await renderDarkViaVariables(node, light1x);
+  return {
+    imageName: safe,
+    dir: `${safe}.imageset/`,
+    light1x, light2x,
+    dark1x: dark?.dark1x ?? null,
+    dark2x: dark?.dark2x ?? null,
+    lightPath: getNodeFullPath(node),
+    darkPath: null, // dark came from a variable-swap clone of `node`
+  };
+}
+
+// ── Page-export mode ─────────────────────────────────────────────────────────
+
+const PAGE_EXPORT_PREFIX = 'img_exp/';
+const DARK_SUFFIX = '-dark';
+
+interface PageExportCandidate {
+  node: SceneNode;
+  fullName: string;  // e.g. "img_exp/icon_back" — exact node name as in Figma
+  baseName: string;  // e.g. "icon_back" — fullName with PAGE_EXPORT_PREFIX stripped
+}
+
+/**
+ * Walk the current page and collect every node whose name starts with the
+ * `img_exp/` prefix. Do NOT recurse into matching nodes — they are leaves.
+ */
+function collectPageExportCandidates(): PageExportCandidate[] {
+  const out: PageExportCandidate[] = [];
+  function walk(parent: BaseNode & ChildrenMixin): void {
+    for (const child of parent.children) {
+      if (child.name.startsWith(PAGE_EXPORT_PREFIX)) {
+        out.push({
+          node: child,
+          fullName: child.name,
+          baseName: child.name.slice(PAGE_EXPORT_PREFIX.length),
+        });
+      } else if ('children' in child) {
+        walk(child as BaseNode & ChildrenMixin);
+      }
+    }
+  }
+  walk(figma.currentPage);
+  return out;
+}
+
+/**
+ * Search the entire current-page subtree for the first node whose name is
+ * an exact match. Used to look up a `-dark` sibling — the spec says
+ * "anywhere on the page with that exact name", so traversal is unrestricted.
+ */
+function findPageNodeByExactName(name: string): SceneNode | null {
+  function walk(parent: BaseNode & ChildrenMixin): SceneNode | null {
+    for (const child of parent.children) {
+      if (child.name === name) return child;
+      if ('children' in child) {
+        const found = walk(child as BaseNode & ChildrenMixin);
+        if (found) return found;
+      }
+    }
+    return null;
+  }
+  return walk(figma.currentPage);
+}
+
+/**
+ * Build the folder-path segments from the node's parent chain up to (but not
+ * including) the page. Innermost ancestor → innermost (last) segment.
+ */
+function getPagePath(node: SceneNode): string[] {
+  const parts: string[] = [];
+  let cur: BaseNode | null = node.parent;
+  while (cur && cur.type !== 'PAGE') {
+    parts.unshift(sanitizePagePart(cur.name));
+    cur = cur.parent;
+  }
+  return parts;
+}
+
+/**
+ * Build a human-readable hierarchy path used in error messages: includes the
+ * page, every ancestor, and the node's own name (raw, not sanitized).
+ *   e.g. "Settings > Mobile > Toolbar > img_exp/icon_back"
+ */
+function getNodeFullPath(node: BaseNode): string {
+  const parts: string[] = [];
+  let cur: BaseNode | null = node;
+  while (cur && cur.type !== 'DOCUMENT') {
+    parts.unshift(cur.name);
+    cur = cur.parent;
+  }
+  return parts.join(' > ');
+}
+
+async function buildPageImageset(
+  lightNode: SceneNode,
+  darkNode: SceneNode | null,
+  imageName: string,
+  folderPath: string[],
+): Promise<ImagesetBuffer> {
+  const safe = sanitizePagePart(imageName);
+  const dir  = [...folderPath, `${safe}.imageset`].join('/') + '/';
+
+  const light1x = await lightNode.exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: 1 } });
+  const light2x = await lightNode.exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: 2 } });
+
+  let dark1x: Uint8Array | null = null;
+  let dark2x: Uint8Array | null = null;
+
+  if (darkNode) {
+    dark1x = await darkNode.exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: 1 } });
+    dark2x = await darkNode.exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: 2 } });
+  } else {
+    const dark = await renderDarkViaVariables(lightNode, light1x);
+    if (dark) { dark1x = dark.dark1x; dark2x = dark.dark2x; }
+  }
+
+  return {
+    imageName: safe,
+    dir,
+    light1x, light2x,
+    dark1x, dark2x,
+    lightPath: getNodeFullPath(lightNode),
+    darkPath: darkNode ? getNodeFullPath(darkNode) : null,
+  };
 }
 
 // ── Plugin bootstrap ──────────────────────────────────────────────────────────
@@ -341,21 +535,122 @@ figma.ui.onmessage = async (msg: UIToCode) => {
         return n && isOnCurrentPage(n);
       });
 
-      let exported = 0;
+      const buffers: ImagesetBuffer[] = [];
       let failed = 0;
 
       for (const entry of toExport) {
         try {
           const node = figma.getNodeById(entry.nodeId) as SceneNode;
-          await exportImageset(node, entry.name);
-          exported++;
+          buffers.push(await buildTaggedImageset(node, entry.name));
         } catch (err) {
           console.error(`Export failed for "${entry.name}":`, err);
           failed++;
         }
       }
 
-      figma.ui.postMessage({ type: 'exportDone', exported, failed } as CodeToUI);
+      const sizeErrors: string[] = [];
+      for (const b of buffers) sizeErrors.push(...validateImagesetSizes(b));
+      if (sizeErrors.length > 0) {
+        figma.ui.postMessage({
+          type: 'exportError',
+          message: ['Image size validation failed:', ...sizeErrors].join('\n'),
+        } as CodeToUI);
+        break;
+      }
+
+      for (const b of buffers) emitImageset(b);
+      figma.ui.postMessage({ type: 'exportDone', exported: buffers.length, failed, mode: 'tagged' } as CodeToUI);
+      break;
+    }
+
+    case 'exportPage': {
+      const candidates = collectPageExportCandidates();
+
+      // Orphan-dark check — a candidate ending in -dark must have a matching light counterpart.
+      const allFullNames = new Set(candidates.map(c => c.fullName));
+      const orphans: SceneNode[] = [];
+      for (const c of candidates) {
+        if (!c.fullName.endsWith(DARK_SUFFIX)) continue;
+        const lightFullName = c.fullName.slice(0, -DARK_SUFFIX.length);
+        if (!allFullNames.has(lightFullName)) orphans.push(c.node);
+      }
+      if (orphans.length > 0) {
+        const lines = ['Dark layers without a light counterpart:'];
+        for (const n of orphans) lines.push(`  ${getNodeFullPath(n)}`);
+        figma.ui.postMessage({
+          type: 'exportError',
+          message: lines.join('\n'),
+        } as CodeToUI);
+        break;
+      }
+
+      // Resolve dark sibling for each candidate (by full-name match anywhere on page).
+      // Dark siblings are then excluded from being exported as their own light image.
+      interface Job {
+        light: SceneNode;
+        dark: SceneNode | null;
+        finalName: string;
+        folder: string[];
+      }
+      const consumedAsDark = new Set<string>();
+      const jobs: Job[] = [];
+      for (const c of candidates) {
+        const darkSibling = findPageNodeByExactName(c.fullName + DARK_SUFFIX);
+        if (darkSibling) consumedAsDark.add(darkSibling.id);
+        jobs.push({
+          light: c.node,
+          dark: darkSibling,
+          finalName: sanitizePagePart(c.baseName),
+          folder: getPagePath(c.node),
+        });
+      }
+      const finalJobs = jobs.filter(j => !consumedAsDark.has(j.light.id));
+
+      // Duplicate detection — by final imageset name only (folder-agnostic).
+      const byFinalName = new Map<string, SceneNode[]>();
+      for (const j of finalJobs) {
+        const arr = byFinalName.get(j.finalName) ?? [];
+        arr.push(j.light);
+        byFinalName.set(j.finalName, arr);
+      }
+      const dupeEntries = [...byFinalName.entries()].filter(([, nodes]) => nodes.length > 1);
+      if (dupeEntries.length > 0) {
+        const lines = ['Duplicate image names:'];
+        for (const [name, nodes] of dupeEntries) {
+          lines.push(`  "${name}":`);
+          for (const n of nodes) lines.push(`    ${getNodeFullPath(n)}`);
+        }
+        figma.ui.postMessage({
+          type: 'exportError',
+          message: lines.join('\n'),
+        } as CodeToUI);
+        break;
+      }
+
+      const buffers: ImagesetBuffer[] = [];
+      let failed = 0;
+      for (const job of finalJobs) {
+        try {
+          buffers.push(await buildPageImageset(job.light, job.dark, job.finalName, job.folder));
+        } catch (err) {
+          console.error(`Page export failed for "${job.finalName}":`, err);
+          failed++;
+        }
+      }
+
+      const sizeErrors: string[] = [];
+      for (const b of buffers) sizeErrors.push(...validateImagesetSizes(b));
+      if (sizeErrors.length > 0) {
+        figma.ui.postMessage({
+          type: 'exportError',
+          message: ['Image size validation failed:', ...sizeErrors].join('\n'),
+        } as CodeToUI);
+        break;
+      }
+
+      for (const b of buffers) emitImageset(b);
+      // Page mode always produces a ZIP, even when empty (per spec).
+      figma.ui.postMessage({ type: 'exportDone', exported: buffers.length, failed, mode: 'page' } as CodeToUI);
       break;
     }
   }

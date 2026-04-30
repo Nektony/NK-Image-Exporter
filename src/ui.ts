@@ -51,8 +51,9 @@ const searchInput = document.getElementById('search-input') as HTMLInputElement;
 const imageList   = document.getElementById('image-list')!;
 const emptyList   = document.getElementById('empty-list')!;
 
-const exportBtn    = document.getElementById('export-btn') as HTMLButtonElement;
-const exportStatus = document.getElementById('export-status')!;
+const exportBtn     = document.getElementById('export-btn') as HTMLButtonElement;
+const exportPageBtn = document.getElementById('export-page-btn') as HTMLButtonElement;
+const exportStatus  = document.getElementById('export-status')!;
 
 // ── Messaging ────────────────────────────────────────────────────────────────
 
@@ -72,7 +73,10 @@ window.onmessage = (event: MessageEvent) => {
       pendingZipFiles[msg.fileName] = new Uint8Array(msg.bytes);
       break;
     case 'exportDone':
-      onExportDone(msg.exported, msg.failed);
+      onExportDone(msg.exported, msg.failed, msg.mode);
+      break;
+    case 'exportError':
+      onExportError(msg.message);
       break;
     case 'error':
       showError(msg.message);
@@ -276,30 +280,46 @@ function downloadZip(zipBytes: Uint8Array, fileName: string): void {
   document.body.removeChild(a);
 }
 
-function onExportDone(exported: number, failed: number): void {
-  if (exported > 0) {
+function clearPendingZip(): void {
+  for (const key of Object.keys(pendingZipFiles)) delete pendingZipFiles[key];
+}
+
+function resetExportButtons(): void {
+  renderFooter();
+  exportBtn.disabled = state.currentPageCount === 0;
+  exportPageBtn.disabled = false;
+  exportPageBtn.textContent = 'Export page (img_exp/)';
+}
+
+function setExportStatus(text: string, kind: 'success' | 'warning' | 'error'): void {
+  exportStatus.classList.remove('hidden', 'success', 'warning', 'error');
+  exportStatus.textContent = text;
+  exportStatus.classList.add(kind);
+}
+
+function onExportDone(exported: number, failed: number, mode: 'tagged' | 'page'): void {
+  // Page mode always produces a download (empty ZIP if no candidates).
+  // Tagged mode only downloads if at least one image was exported.
+  const shouldDownload = mode === 'page' || exported > 0;
+  if (shouldDownload) {
     const zipBytes = zipSync(pendingZipFiles, { level: 0 }); // level 0 = store, PNGs don't compress
     downloadZip(zipBytes, 'images.zip');
   }
-
-  // Clear accumulator for next run
-  for (const key of Object.keys(pendingZipFiles)) {
-    delete pendingZipFiles[key];
-  }
-
-  renderFooter();
-  exportBtn.disabled = state.currentPageCount === 0;
-  exportStatus.classList.remove('hidden', 'success', 'warning');
+  clearPendingZip();
+  resetExportButtons();
 
   if (failed > 0) {
-    exportStatus.textContent = `Done — ${exported} exported, ${failed} failed`;
-    exportStatus.classList.add('warning');
+    setExportStatus(`Done — ${exported} exported, ${failed} failed`, 'warning');
   } else {
-    exportStatus.textContent = `${exported} image${exported !== 1 ? 's' : ''} saved as images.zip`;
-    exportStatus.classList.add('success');
+    setExportStatus(`${exported} image${exported !== 1 ? 's' : ''} saved as images.zip`, 'success');
   }
-
   setTimeout(() => exportStatus.classList.add('hidden'), 4000);
+}
+
+function onExportError(message: string): void {
+  clearPendingZip();
+  resetExportButtons();
+  setExportStatus(message, 'error');
 }
 
 // ── Event listeners ───────────────────────────────────────────────────────────
@@ -327,12 +347,21 @@ searchInput.addEventListener('input', () => {
 });
 
 exportBtn.addEventListener('click', () => {
-  // Clear any leftover files from a previous interrupted run
-  for (const key of Object.keys(pendingZipFiles)) delete pendingZipFiles[key];
+  clearPendingZip();
   exportBtn.disabled = true;
   exportBtn.textContent = 'Exporting…';
+  exportPageBtn.disabled = true;
   exportStatus.classList.add('hidden');
   send({ type: 'export' });
+});
+
+exportPageBtn.addEventListener('click', () => {
+  clearPendingZip();
+  exportPageBtn.disabled = true;
+  exportPageBtn.textContent = 'Exporting…';
+  exportBtn.disabled = true;
+  exportStatus.classList.add('hidden');
+  send({ type: 'exportPage' });
 });
 
 // ── Init ──────────────────────────────────────────────────────────────────────

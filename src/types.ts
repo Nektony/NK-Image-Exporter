@@ -11,7 +11,8 @@ export type UIToCode =
   | { type: 'unmark'; nodeId: string }
   | { type: 'rename'; nodeId: string; newName: string }
   | { type: 'focus'; nodeId: string }
-  | { type: 'export' };
+  | { type: 'export' }
+  | { type: 'exportPage' };
 
 // ── Messages: Code → UI ──────────────────────────────────────────────────────
 
@@ -29,5 +30,6 @@ export interface PluginState {
 export type CodeToUI =
   | ({ type: 'state' } & PluginState)
   | { type: 'exportFile'; fileName: string; bytes: number[] }
-  | { type: 'exportDone'; exported: number; failed: number }
+  | { type: 'exportDone'; exported: number; failed: number; mode: 'tagged' | 'page' }
+  | { type: 'exportError'; message: string }
   | { type: 'error'; message: string };
