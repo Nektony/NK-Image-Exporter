@@ -127,80 +127,122 @@ function sanitizePagePart(name: string): string {
 // ── Dark mode detection ───────────────────────────────────────────────────────
 
 interface DarkModeInfo {
-  type: 'mode';
   collection: VariableCollection;
   darkModeId: string;
 }
 
 /**
- * Approach A: find a variable collection that has both a light-named and
- * dark-named mode (case-insensitive).
+ * Approach A: return ALL variable collections that have a dark-named mode.
  */
-function findDarkModeCollection(): DarkModeInfo | null {
+function findAllDarkModeCollections(): DarkModeInfo[] {
+  const result: DarkModeInfo[] = [];
   try {
     for (const col of figma.variables.getLocalVariableCollections()) {
       const dark = col.modes.find(m => /dark/i.test(m.name));
-      if (dark) return { type: 'mode', collection: col, darkModeId: dark.modeId };
+      if (dark) result.push({ collection: col, darkModeId: dark.modeId });
     }
-  } catch { /* Variables API unavailable or no collections */ }
-  return null;
+  } catch { /* Variables API unavailable */ }
+  return result;
 }
 
 /**
- * Approach B: any variable whose name starts with 'Dark/' signals that a
+ * Approach B: any paint style or variable starting with 'Dark/' signals a
  * name-based dark scheme exists.
  */
-function hasDarkPrefixVariables(): boolean {
+function hasDarkScheme(): boolean {
   try {
-    return figma.variables.getLocalVariables().some(v => v.name.startsWith('Dark/'));
-  } catch { return false; }
+    if (figma.getLocalPaintStyles().some(s => s.name.startsWith('Dark/'))) return true;
+    if (figma.variables.getLocalVariables().some(v => v.name.startsWith('Dark/'))) return true;
+  } catch { /* ignore */ }
+  return false;
 }
 
-// ── Dark binding swap (Approach B) ───────────────────────────────────────────
+// ── Dark style/binding swap (Approach B) ─────────────────────────────────────
 
 /**
- * Recursively walk a cloned node tree and swap every `Light/…` colour
- * variable binding → the matching `Dark/…` variable.  Only touches fills
- * and strokes (SOLID paints).  Returns true if at least one swap was made.
+ * Swap every `Light/…` paint style or variable binding → `Dark/…` on the clone.
+ *
+ * Two mechanisms per node:
+ *   1. fillStyleId / strokeStyleId — local paint styles named "Light/…"
+ *   2. paint.boundVariables.color  — variable-bound solid fills/strokes
+ *
+ * For instances with no explicit paint override we fall back to the master
+ * component to create a Dark/ override on the clone.
  */
 function applyDarkBindings(root: SceneNode): boolean {
-  try { figma.variables.getLocalVariables(); } catch { return false; }
+  let paintStyles: PaintStyle[] = [];
+  try { paintStyles = figma.getLocalPaintStyles(); } catch { /* ignore */ }
+  const styleByName = new Map(paintStyles.map(s => [s.name, s]));
 
-  const allVars = figma.variables.getLocalVariables();
+  let allVars: Variable[] = [];
+  try { allVars = figma.variables.getLocalVariables(); } catch { /* ignore */ }
   const varById = new Map(allVars.map(v => [v.id, v]));
+
   let changed = false;
 
-  function swapPaints(paints: ReadonlyArray<Paint>): ReadonlyArray<Paint> {
-    return paints.map(paint => {
+  function swapStyleId(node: SceneNode, prop: 'fillStyleId' | 'strokeStyleId'): void {
+    if (!(prop in node)) return;
+    const styleId = (node as any)[prop];
+    if (!styleId || styleId === figma.mixed) return;
+    const style = figma.getStyleById(styleId as string) as PaintStyle | null;
+    if (!style?.name.startsWith('Light/')) return;
+    const darkStyle = styleByName.get('Dark/' + style.name.slice(6));
+    if (!darkStyle) return;
+    (node as any)[prop] = darkStyle.id;
+    changed = true;
+  }
+
+  function swapPaints(paints: ReadonlyArray<Paint>): { result: ReadonlyArray<Paint>; swapped: boolean } {
+    let swapped = false;
+    const result = paints.map(paint => {
       if (paint.type !== 'SOLID') return paint;
       const colorBinding = (paint.boundVariables as Record<string, VariableAlias> | undefined)?.color;
       if (!colorBinding) return paint;
       const lightVar = varById.get(colorBinding.id);
       if (!lightVar?.name.startsWith('Light/')) return paint;
-      const darkVar = allVars.find(
-        v => v.name === 'Dark/' + lightVar.name.slice(6) && v.resolvedType === lightVar.resolvedType,
-      );
+      const darkVar = allVars.find(v => v.name === 'Dark/' + lightVar.name.slice(6));
       if (!darkVar) return paint;
       changed = true;
+      swapped = true;
       return figma.variables.setBoundVariableForPaint(paint, 'color', darkVar);
     });
+    return { result, swapped };
   }
 
-  function traverse(node: SceneNode): void {
-    if ('fills' in node) {
-      const fills = (node as GeometryMixin).fills;
-      if (Array.isArray(fills)) (node as GeometryMixin).fills = swapPaints(fills) as Paint[];
+  function effectivePaints(node: SceneNode, prop: 'fills' | 'strokes'): ReadonlyArray<Paint> | null {
+    if (!(prop in node)) return null;
+    const own = (node as GeometryMixin)[prop] as ReadonlyArray<Paint>;
+    if (Array.isArray(own) && own.length > 0) return own;
+    if (node.type === 'INSTANCE') {
+      const master = (node as InstanceNode).mainComponent;
+      if (master && prop in master) {
+        const mf = (master as GeometryMixin)[prop] as ReadonlyArray<Paint>;
+        if (Array.isArray(mf) && mf.length > 0) return mf;
+      }
     }
-    if ('strokes' in node) {
-      const strokes = (node as GeometryMixin).strokes;
-      if (Array.isArray(strokes)) (node as GeometryMixin).strokes = swapPaints(strokes) as Paint[];
+    return null;
+  }
+
+  function processNode(node: SceneNode): void {
+    swapStyleId(node, 'fillStyleId');
+    swapStyleId(node, 'strokeStyleId');
+
+    for (const prop of ['fills', 'strokes'] as const) {
+      const paints = effectivePaints(node, prop);
+      if (paints) {
+        const { result, swapped } = swapPaints(paints);
+        if (swapped) (node as GeometryMixin)[prop] = result as Paint[];
+      }
     }
+
     if ('children' in node) {
-      for (const child of (node as ChildrenMixin).children) traverse(child as SceneNode);
+      for (const child of (node as ChildrenMixin).children as SceneNode[]) {
+        processNode(child);
+      }
     }
   }
 
-  traverse(root);
+  processNode(root);
   return changed;
 }
 
@@ -226,11 +268,28 @@ function buildContentsJson(name: string, hasDark: boolean): Uint8Array {
     );
   }
   const json = JSON.stringify({ images, info: { author: 'xcode', version: 1 } }, null, 2);
-  // TextEncoder is NOT available in the Figma plugin sandbox — encode manually.
-  // JSON output is guaranteed ASCII so charCodeAt is safe.
   const bytes = new Uint8Array(json.length);
   for (let i = 0; i < json.length; i++) bytes[i] = json.charCodeAt(i);
   return bytes;
+}
+
+// ── Clone tracking ────────────────────────────────────────────────────────────
+
+const orphanCloneIds: string[] = [];
+
+function purgeOrphanClones(): void {
+  for (const id of orphanCloneIds) {
+    const n = figma.getNodeById(id);
+    if (n) try { n.remove(); } catch { /* best effort */ }
+  }
+  orphanCloneIds.length = 0;
+}
+
+function removeClone(id: string): void {
+  const n = figma.getNodeById(id);
+  if (n) try { n.remove(); } catch { /* best effort */ }
+  const idx = orphanCloneIds.indexOf(id);
+  if (idx >= 0) orphanCloneIds.splice(idx, 1);
 }
 
 // ── Send a file to the UI ─────────────────────────────────────────────────────
@@ -320,23 +379,30 @@ async function renderDarkViaVariables(
   node: SceneNode,
   light1x: Uint8Array,
 ): Promise<{ dark1x: Uint8Array; dark2x: Uint8Array } | null> {
-  const darkCollection = findDarkModeCollection();
-  const usesNamedDark  = hasDarkPrefixVariables();
+  const darkCollections = findAllDarkModeCollections();
+  const usesDarkScheme  = hasDarkScheme();
 
-  if ((!darkCollection && !usesNamedDark) || !('clone' in node)) return null;
+  if ((darkCollections.length === 0 && !usesDarkScheme) || !('clone' in node)) return null;
 
   const clone = (node as SceneNode & { clone(): SceneNode }).clone();
+  const cloneId = clone.id;
+  orphanCloneIds.push(cloneId);
+
   try {
     let darkReady = false;
 
-    if (darkCollection && 'setExplicitVariableModeForCollection' in clone) {
-      (clone as FrameNode).setExplicitVariableModeForCollection(
-        darkCollection.collection,
-        darkCollection.darkModeId,
-      );
+    // Approach A — switch every variable collection to its Dark mode
+    if (darkCollections.length > 0 && 'setExplicitVariableModeForCollection' in clone) {
+      for (const info of darkCollections) {
+        (clone as FrameNode).setExplicitVariableModeForCollection(info.collection, info.darkModeId);
+      }
       darkReady = true;
-    } else if (usesNamedDark) {
-      darkReady = applyDarkBindings(clone);
+    }
+
+    // Approach B — swap Light/… paint styles and variable bindings → Dark/… (additive with A)
+    if (usesDarkScheme) {
+      const swapped = applyDarkBindings(clone);
+      if (swapped) darkReady = true;
     }
 
     if (!darkReady) return null;
@@ -347,7 +413,7 @@ async function renderDarkViaVariables(
 
     return { dark1x: d1x, dark2x: d2x };
   } finally {
-    clone.remove();
+    removeClone(cloneId);
   }
 }
 
@@ -529,6 +595,7 @@ figma.ui.onmessage = async (msg: UIToCode) => {
     }
 
     case 'export': {
+      purgeOrphanClones();
       const images = syncRegistry();
       const toExport = images.filter(e => {
         const n = figma.getNodeById(e.nodeId);
@@ -564,6 +631,7 @@ figma.ui.onmessage = async (msg: UIToCode) => {
     }
 
     case 'exportPage': {
+      purgeOrphanClones();
       const candidates = collectPageExportCandidates();
 
       // Orphan-dark check — a candidate ending in -dark must have a matching light counterpart.
@@ -653,5 +721,6 @@ figma.ui.onmessage = async (msg: UIToCode) => {
       figma.ui.postMessage({ type: 'exportDone', exported: buffers.length, failed, mode: 'page' } as CodeToUI);
       break;
     }
+
   }
 };
