@@ -438,12 +438,43 @@ async function buildTaggedImageset(node: SceneNode, imageName: string): Promise<
 // ── Page-export mode ─────────────────────────────────────────────────────────
 
 const PAGE_EXPORT_PREFIX = 'img_exp/';
-const DARK_SUFFIX = '-dark';
+const DARK_SUFFIX  = '-dark';
+const LIGHT_SUFFIX = '-light';
+
+/**
+ * Naming scheme for an `img_exp/` candidate:
+ *   - `light-implicit` — no suffix (e.g. `img_exp/foo`); dark is optional, may
+ *     fall back to variable-swap if no `-dark` sibling exists.
+ *   - `light-explicit` — `-light` suffix (e.g. `img_exp/foo-light`); a `-dark`
+ *     sibling is REQUIRED — no fallback.
+ *   - `dark`           — `-dark` suffix; must have a matching light counterpart
+ *     (either implicit or explicit).
+ *
+ * `coreName` is the node name with the `img_exp/` prefix and the kind-suffix
+ * (if any) both stripped. It's the key that pairs lights with darks and
+ * defines the final imageset name (after sanitization).
+ */
+type CandidateKind = 'light-implicit' | 'light-explicit' | 'dark';
 
 interface PageExportCandidate {
   node: SceneNode;
-  fullName: string;  // e.g. "img_exp/icon_back" — exact node name as in Figma
-  baseName: string;  // e.g. "icon_back" — fullName with PAGE_EXPORT_PREFIX stripped
+  fullName: string;  // e.g. "img_exp/foo-light" — exact node name as in Figma
+  kind: CandidateKind;
+  coreName: string;  // e.g. "foo" — pairing key & basis for final imageset name
+}
+
+function classifyCandidate(node: SceneNode): PageExportCandidate {
+  const fullName = node.name;
+  const afterPrefix = fullName.slice(PAGE_EXPORT_PREFIX.length);
+  if (afterPrefix.endsWith(DARK_SUFFIX)) {
+    return { node, fullName, kind: 'dark',
+             coreName: afterPrefix.slice(0, -DARK_SUFFIX.length) };
+  }
+  if (afterPrefix.endsWith(LIGHT_SUFFIX)) {
+    return { node, fullName, kind: 'light-explicit',
+             coreName: afterPrefix.slice(0, -LIGHT_SUFFIX.length) };
+  }
+  return { node, fullName, kind: 'light-implicit', coreName: afterPrefix };
 }
 
 /**
@@ -455,11 +486,7 @@ function collectPageExportCandidates(): PageExportCandidate[] {
   function walk(parent: BaseNode & ChildrenMixin): void {
     for (const child of parent.children) {
       if (child.name.startsWith(PAGE_EXPORT_PREFIX)) {
-        out.push({
-          node: child,
-          fullName: child.name,
-          baseName: child.name.slice(PAGE_EXPORT_PREFIX.length),
-        });
+        out.push(classifyCandidate(child));
       } else if ('children' in child) {
         walk(child as BaseNode & ChildrenMixin);
       }
@@ -467,25 +494,6 @@ function collectPageExportCandidates(): PageExportCandidate[] {
   }
   walk(figma.currentPage);
   return out;
-}
-
-/**
- * Search the entire current-page subtree for the first node whose name is
- * an exact match. Used to look up a `-dark` sibling — the spec says
- * "anywhere on the page with that exact name", so traversal is unrestricted.
- */
-function findPageNodeByExactName(name: string): SceneNode | null {
-  function walk(parent: BaseNode & ChildrenMixin): SceneNode | null {
-    for (const child of parent.children) {
-      if (child.name === name) return child;
-      if ('children' in child) {
-        const found = walk(child as BaseNode & ChildrenMixin);
-        if (found) return found;
-      }
-    }
-    return null;
-  }
-  return walk(figma.currentPage);
 }
 
 /**
@@ -634,52 +642,82 @@ figma.ui.onmessage = async (msg: UIToCode) => {
       purgeOrphanClones();
       const candidates = collectPageExportCandidates();
 
-      // Orphan-dark check — a candidate ending in -dark must have a matching light counterpart.
-      const allFullNames = new Set(candidates.map(c => c.fullName));
-      const orphans: SceneNode[] = [];
+      // Group candidates by their pairing key (coreName) so we can validate
+      // light/dark companionship and build jobs in a single pass.
+      interface Group { lights: PageExportCandidate[]; darks: PageExportCandidate[]; }
+      const byCore = new Map<string, Group>();
       for (const c of candidates) {
-        if (!c.fullName.endsWith(DARK_SUFFIX)) continue;
-        const lightFullName = c.fullName.slice(0, -DARK_SUFFIX.length);
-        if (!allFullNames.has(lightFullName)) orphans.push(c.node);
+        let g = byCore.get(c.coreName);
+        if (!g) { g = { lights: [], darks: [] }; byCore.set(c.coreName, g); }
+        if (c.kind === 'dark') g.darks.push(c);
+        else g.lights.push(c);
       }
-      if (orphans.length > 0) {
+
+      // Orphan-dark check — a -dark candidate must have at least one light
+      // counterpart (implicit OR -light explicit) sharing its coreName.
+      const darkOrphans: SceneNode[] = [];
+      // Orphan-light check — a -light candidate must have a -dark counterpart.
+      const lightOrphans: SceneNode[] = [];
+      for (const g of byCore.values()) {
+        if (g.darks.length > 0 && g.lights.length === 0) {
+          for (const d of g.darks) darkOrphans.push(d.node);
+        }
+        if (g.darks.length === 0) {
+          for (const l of g.lights) {
+            if (l.kind === 'light-explicit') lightOrphans.push(l.node);
+          }
+        }
+      }
+      if (darkOrphans.length > 0) {
         const lines = ['Dark layers without a light counterpart:'];
-        for (const n of orphans) lines.push(`  ${getNodeFullPath(n)}`);
-        figma.ui.postMessage({
-          type: 'exportError',
-          message: lines.join('\n'),
-        } as CodeToUI);
+        for (const n of darkOrphans) lines.push(`  ${getNodeFullPath(n)}`);
+        figma.ui.postMessage({ type: 'exportError', message: lines.join('\n') } as CodeToUI);
+        break;
+      }
+      if (lightOrphans.length > 0) {
+        const lines = ['Light layers without a dark counterpart:'];
+        for (const n of lightOrphans) lines.push(`  ${getNodeFullPath(n)}`);
+        figma.ui.postMessage({ type: 'exportError', message: lines.join('\n') } as CodeToUI);
         break;
       }
 
-      // Resolve dark sibling for each candidate (by full-name match anywhere on page).
-      // Dark siblings are then excluded from being exported as their own light image.
+      // Build jobs from light candidates only. Each light is paired with the
+      // -dark in its group (if any). Dark candidates never become jobs themselves.
       interface Job {
         light: SceneNode;
         dark: SceneNode | null;
         finalName: string;
         folder: string[];
       }
-      const consumedAsDark = new Set<string>();
       const jobs: Job[] = [];
-      for (const c of candidates) {
-        const darkSibling = findPageNodeByExactName(c.fullName + DARK_SUFFIX);
-        if (darkSibling) consumedAsDark.add(darkSibling.id);
-        jobs.push({
-          light: c.node,
-          dark: darkSibling,
-          finalName: sanitizePagePart(c.baseName),
-          folder: getPagePath(c.node),
-        });
+      for (const g of byCore.values()) {
+        const darkNode = g.darks[0]?.node ?? null; // grouping guarantees ≤ 1 dark per coreName in well-formed input; if more, dupe-check fires below
+        for (const l of g.lights) {
+          jobs.push({
+            light: l.node,
+            dark: darkNode,
+            finalName: sanitizePagePart(l.coreName),
+            folder: getPagePath(l.node),
+          });
+        }
       }
-      const finalJobs = jobs.filter(j => !consumedAsDark.has(j.light.id));
 
       // Duplicate detection — by final imageset name only (folder-agnostic).
+      // This catches: (a) `foo` and `foo-light` co-existing, (b) any two unrelated
+      // candidates sanitizing to the same name, (c) two -dark variants for one core.
       const byFinalName = new Map<string, SceneNode[]>();
-      for (const j of finalJobs) {
+      for (const j of jobs) {
         const arr = byFinalName.get(j.finalName) ?? [];
         arr.push(j.light);
         byFinalName.set(j.finalName, arr);
+      }
+      // Also surface "two -dark candidates for the same core" as a duplicate.
+      for (const g of byCore.values()) {
+        if (g.darks.length > 1) {
+          const arr = byFinalName.get(sanitizePagePart(g.darks[0].coreName)) ?? [];
+          for (let i = 1; i < g.darks.length; i++) arr.push(g.darks[i].node);
+          byFinalName.set(sanitizePagePart(g.darks[0].coreName), arr);
+        }
       }
       const dupeEntries = [...byFinalName.entries()].filter(([, nodes]) => nodes.length > 1);
       if (dupeEntries.length > 0) {
@@ -688,16 +726,13 @@ figma.ui.onmessage = async (msg: UIToCode) => {
           lines.push(`  "${name}":`);
           for (const n of nodes) lines.push(`    ${getNodeFullPath(n)}`);
         }
-        figma.ui.postMessage({
-          type: 'exportError',
-          message: lines.join('\n'),
-        } as CodeToUI);
+        figma.ui.postMessage({ type: 'exportError', message: lines.join('\n') } as CodeToUI);
         break;
       }
 
       const buffers: ImagesetBuffer[] = [];
       let failed = 0;
-      for (const job of finalJobs) {
+      for (const job of jobs) {
         try {
           buffers.push(await buildPageImageset(job.light, job.dark, job.finalName, job.folder));
         } catch (err) {
