@@ -245,6 +245,35 @@
 
     .btn-export + .btn-export { margin-top: 6px; }
 
+    .setname-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 4px;
+    }
+    .setname-label {
+      font-size: 10px;
+      font-weight: 600;
+      color: #999;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      white-space: nowrap;
+    }
+    .setname-input {
+      flex: 1;
+      height: 26px !important;
+      font-size: 11px !important;
+    }
+    .setname-input.invalid {
+      border-color: #d93025 !important;
+      background: #fff !important;
+    }
+    .setname-error {
+      font-size: 10.5px;
+      color: #d93025;
+      margin: 2px 0 6px 0;
+    }
+
     .export-status {
       font-size: 11px;
       text-align: center;
@@ -311,6 +340,11 @@
 
   <!-- Footer -->
   <div class="footer">
+    <div class="setname-row">
+      <label class="setname-label" for="setname-input">Set name</label>
+      <input type="text" id="setname-input" class="setname-input" placeholder="App (optional)" />
+    </div>
+    <div class="setname-error hidden" id="setname-error"></div>
     <button class="btn btn-export" id="export-page-btn">Export page (img_exp/)</button>
     <button class="btn btn-export" id="export-btn" disabled>No images on this page</button>
     <div class="export-status hidden" id="export-status"></div>

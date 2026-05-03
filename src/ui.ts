@@ -54,6 +54,34 @@ const emptyList   = document.getElementById('empty-list')!;
 const exportBtn     = document.getElementById('export-btn') as HTMLButtonElement;
 const exportPageBtn = document.getElementById('export-page-btn') as HTMLButtonElement;
 const exportStatus  = document.getElementById('export-status')!;
+const setNameInput  = document.getElementById('setname-input') as HTMLInputElement;
+const setNameError  = document.getElementById('setname-error')!;
+
+// Common Swift declaration/contextual keywords (subset that's actually likely to clash
+// with a one-word product name). Identifiers in our generated code use the SetName
+// as a type-name prefix, so reserved-word collision would produce uncompilable Swift.
+const SWIFT_RESERVED = new Set([
+  'class', 'struct', 'enum', 'func', 'var', 'let', 'extension', 'protocol',
+  'import', 'typealias', 'init', 'deinit', 'case', 'default', 'if', 'else',
+  'for', 'while', 'do', 'switch', 'return', 'break', 'continue', 'throw',
+  'throws', 'rethrows', 'try', 'catch', 'as', 'is', 'in', 'nil', 'true',
+  'false', 'self', 'Self', 'super', 'where', 'guard', 'defer', 'repeat',
+  'fallthrough', 'inout', 'private', 'public', 'internal', 'fileprivate',
+  'open', 'final', 'static', 'dynamic', 'lazy', 'weak', 'unowned',
+  'mutating', 'nonmutating', 'convenience', 'required', 'optional',
+  'indirect', 'infix', 'prefix', 'postfix', 'precedencegroup',
+  'associatedtype', 'subscript', 'operator', 'await', 'async', 'actor',
+  'any', 'some', 'Type', 'Protocol',
+]);
+
+function validateSetName(s: string): string | null {
+  if (s === '') return null; // empty is allowed (drops the prefix everywhere)
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(s)) {
+    return 'Must start with a letter or _, then letters/digits/_ only';
+  }
+  if (SWIFT_RESERVED.has(s)) return `"${s}" is a Swift reserved word`;
+  return null;
+}
 
 // ── Messaging ────────────────────────────────────────────────────────────────
 
@@ -286,9 +314,28 @@ function clearPendingZip(): void {
 
 function resetExportButtons(): void {
   renderFooter();
-  exportBtn.disabled = state.currentPageCount === 0;
-  exportPageBtn.disabled = false;
+  const setNameInvalid = validateSetName(setNameInput.value.trim()) !== null;
+  exportBtn.disabled = state.currentPageCount === 0 || setNameInvalid;
+  exportPageBtn.disabled = setNameInvalid;
   exportPageBtn.textContent = 'Export page (img_exp/)';
+}
+
+function applySetNameValidation(): void {
+  const trimmed = setNameInput.value.trim();
+  const err = validateSetName(trimmed);
+  if (err) {
+    setNameInput.classList.add('invalid');
+    setNameError.textContent = err;
+    setNameError.classList.remove('hidden');
+  } else {
+    setNameInput.classList.remove('invalid');
+    setNameError.textContent = '';
+    setNameError.classList.add('hidden');
+  }
+  // Re-evaluate button disabled state — depends on both validity AND page count.
+  const setNameInvalid = err !== null;
+  exportBtn.disabled = state.currentPageCount === 0 || setNameInvalid;
+  exportPageBtn.disabled = setNameInvalid;
 }
 
 function setExportStatus(text: string, kind: 'success' | 'warning' | 'error'): void {
@@ -347,22 +394,28 @@ searchInput.addEventListener('input', () => {
 });
 
 exportBtn.addEventListener('click', () => {
+  const setName = setNameInput.value.trim();
+  if (validateSetName(setName) !== null) return;
   clearPendingZip();
   exportBtn.disabled = true;
   exportBtn.textContent = 'Exporting…';
   exportPageBtn.disabled = true;
   exportStatus.classList.add('hidden');
-  send({ type: 'export' });
+  send({ type: 'export', setName });
 });
 
 exportPageBtn.addEventListener('click', () => {
+  const setName = setNameInput.value.trim();
+  if (validateSetName(setName) !== null) return;
   clearPendingZip();
   exportPageBtn.disabled = true;
   exportPageBtn.textContent = 'Exporting…';
   exportBtn.disabled = true;
   exportStatus.classList.add('hidden');
-  send({ type: 'exportPage' });
+  send({ type: 'exportPage', setName });
 });
+
+setNameInput.addEventListener('input', applySetNameValidation);
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 

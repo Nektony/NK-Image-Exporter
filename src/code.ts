@@ -306,9 +306,85 @@ function readPngDims(bytes: Uint8Array): { width: number; height: number } {
   return { width: view.getUint32(16), height: view.getUint32(20) };
 }
 
+// ── ASCII-only encoder (TextEncoder is unavailable in Figma's plugin sandbox) ─
+
+function asciiBytes(s: string): Uint8Array {
+  const bytes = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) bytes[i] = s.charCodeAt(i);
+  return bytes;
+}
+
+// ── Swift codegen helpers ────────────────────────────────────────────────────
+
+/** snake_case / kebab-case → lowerCamelCase. Empty → "unnamed". */
+function toLowerCamel(s: string): string {
+  const parts = s.split(/[_\-]+/).filter(p => p.length > 0);
+  if (parts.length === 0) return 'unnamed';
+  const head = parts[0].toLowerCase();
+  const tail = parts.slice(1)
+    .map(p => p.charAt(0).toUpperCase() + p.slice(1).toLowerCase())
+    .join('');
+  return head + tail;
+}
+
+/** Folder-name → Swift case-name path segment: alphanumerics only, lowercased. */
+function toCasePathSegment(s: string): string {
+  const t = s.replace(/[^A-Za-z0-9]/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '').toLowerCase();
+  return t || 'unnamed';
+}
+
+/** Prepend "_" if the identifier starts with a digit (Swift identifier rules). */
+function safeSwiftIdent(s: string): string {
+  return /^[0-9]/.test(s) ? '_' + s : s;
+}
+
+function buildSwiftCaseName(pathSegments: string[], leafCamel: string): string {
+  const parts = [...pathSegments, leafCamel].filter(p => p.length > 0);
+  return safeSwiftIdent(parts.join('_'));
+}
+
+interface SwiftEnumEntry { caseName: string; rawValue: string; }
+
+function buildSwiftFile(setName: string, entries: SwiftEnumEntry[]): Uint8Array {
+  const enumName = `${setName}FigmaImageAssets`;
+  // Namespace prefix is lowercased so disk filenames look like nk_common_aiState
+  // even when the SetName is "Common". Must match diskLeafPrefix in emitOutputBundle.
+  const imageNameBody = setName
+    ? `"nk_${setName.toLowerCase()}_\\(rawValue)"`
+    : `"nk_\\(rawValue)"`;
+  const lines: string[] = [];
+  lines.push('import AppKit');
+  lines.push('');
+  lines.push(`enum ${enumName}: String, CaseIterable {`);
+  lines.push('');
+  for (const e of entries) lines.push(`    case ${e.caseName} = "${e.rawValue}"`);
+  if (entries.length > 0) lines.push('');
+  lines.push(`    var imageName: String { ${imageNameBody} }`);
+  lines.push('');
+  lines.push('    var image: NSImage? {');
+  lines.push('        if let url = Bundle.main.url(forResource: self.imageName, withExtension: "png") {');
+  lines.push('            return NSImage(contentsOf: url)');
+  lines.push('        }');
+  lines.push('        return NSImage(named: self.imageName)');
+  lines.push('    }');
+  lines.push('');
+  lines.push('    static func debugExistanceCheck() {');
+  lines.push('        Self.allCases.forEach {');
+  lines.push('            assert($0.image != nil)');
+  lines.push('        }');
+  lines.push('    }');
+  lines.push('');
+  lines.push('}');
+  lines.push('');
+  return asciiBytes(lines.join('\n'));
+}
+
+// ── Imageset buffers ─────────────────────────────────────────────────────────
+
 interface ImagesetBuffer {
-  imageName: string;       // sanitized name used in filenames
-  dir: string;             // ZIP folder including trailing '/'
+  leafCamel: string;       // lowerCamelCase form of original leaf — Swift raw value & disk-leaf base
+  pathSegments: string[];  // lowercased Figma-ancestor names for Swift case name; empty in tagged mode
+  folderPath: string[];    // case-preserving sanitized folder names for placement INSIDE .xcassets; empty in tagged mode
   light1x: Uint8Array;
   light2x: Uint8Array;
   dark1x: Uint8Array | null;
@@ -355,17 +431,61 @@ function validateImagesetSizes(b: ImagesetBuffer): string[] {
   return errors;
 }
 
-function emitImageset(b: ImagesetBuffer): void {
-  const safe = b.imageName;
-  const dir  = b.dir;
-  sendFile(dir + `${safe}.png`,    b.light1x);
-  sendFile(dir + `${safe}@2x.png`, b.light2x);
-  const hasDark = b.dark1x !== null;
-  if (hasDark) {
-    sendFile(dir + `${safe}~dark.png`,    b.dark1x!);
-    sendFile(dir + `${safe}~dark@2x.png`, b.dark2x!);
+/**
+ * Emit the full output bundle: wrapper folder + .swift file + .xcassets bundle
+ * with all imagesets (flat at the bundle root, prefixed with `nk_<SetName>_`).
+ *
+ * When setName is empty: wrapper / file / enum drop the prefix; disk-leaf prefix
+ * collapses to just `nk_` (no double underscore).
+ */
+function emitOutputBundle(buffers: ImagesetBuffer[], setName: string): void {
+  const bundleName     = `${setName}FigmaImageAssets`;
+  const wrapperPath    = `${bundleName}/`;
+  const xcassetsPath   = `${wrapperPath}${bundleName}.xcassets/`;
+  const swiftPath      = `${wrapperPath}${bundleName}.swift`;
+  // SetName is lowercased in the namespace prefix (e.g. SetName "Common" → "nk_common_<leaf>").
+  // The wrapper folder, .swift filename, and enum name keep the original case.
+  const diskLeafPrefix = setName ? `nk_${setName.toLowerCase()}_` : 'nk_';
+
+  const groupJson = asciiBytes(JSON.stringify({ info: { author: 'xcode', version: 1 } }, null, 2));
+
+  // Collect every unique folder under .xcassets (root + every prefix path) so
+  // each gets its own group-level Contents.json. Folders default to no
+  // namespace, so NSImage(named: leaf) still resolves the imageset regardless
+  // of which folder it's in.
+  const folderPaths = new Set<string>(['']); // '' = .xcassets root
+  for (const b of buffers) {
+    const accum: string[] = [];
+    for (const seg of b.folderPath) {
+      accum.push(seg);
+      folderPaths.add(accum.join('/'));
+    }
   }
-  sendFile(dir + 'Contents.json', buildContentsJson(safe, hasDark));
+  for (const f of folderPaths) {
+    sendFile(`${xcassetsPath}${f}${f ? '/' : ''}Contents.json`, groupJson);
+  }
+
+  // Each imageset placed under its folderPath inside .xcassets.
+  for (const b of buffers) {
+    const diskLeaf = diskLeafPrefix + b.leafCamel;
+    const folder   = b.folderPath.length > 0 ? b.folderPath.join('/') + '/' : '';
+    const dir      = `${xcassetsPath}${folder}${diskLeaf}.imageset/`;
+    const hasDark  = b.dark1x !== null;
+    sendFile(dir + `${diskLeaf}.png`,    b.light1x);
+    sendFile(dir + `${diskLeaf}@2x.png`, b.light2x);
+    if (hasDark) {
+      sendFile(dir + `${diskLeaf}~dark.png`,    b.dark1x!);
+      sendFile(dir + `${diskLeaf}~dark@2x.png`, b.dark2x!);
+    }
+    sendFile(dir + 'Contents.json', buildContentsJson(diskLeaf, hasDark));
+  }
+
+  // Swift enum file (always emitted, even if entries is empty).
+  const entries: SwiftEnumEntry[] = buffers.map(b => ({
+    caseName: buildSwiftCaseName(b.pathSegments, b.leafCamel),
+    rawValue: b.leafCamel,
+  }));
+  sendFile(swiftPath, buildSwiftFile(setName, entries));
 }
 
 // ── Dark variant via variable-swap (shared by both export modes) ─────────────
@@ -420,13 +540,14 @@ async function renderDarkViaVariables(
 // ── Build one imageset (tagged mode — flat output) ───────────────────────────
 
 async function buildTaggedImageset(node: SceneNode, imageName: string): Promise<ImagesetBuffer> {
-  const safe = sanitizeName(imageName);
+  const leafCamel = toLowerCamel(sanitizeName(imageName));
   const light1x = await node.exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: 1 } });
   const light2x = await node.exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: 2 } });
   const dark = await renderDarkViaVariables(node, light1x);
   return {
-    imageName: safe,
-    dir: `${safe}.imageset/`,
+    leafCamel,
+    pathSegments: [], // tagged mode has no folder hierarchy
+    folderPath: [],
     light1x, light2x,
     dark1x: dark?.dark1x ?? null,
     dark2x: dark?.dark2x ?? null,
@@ -531,8 +652,8 @@ async function buildPageImageset(
   imageName: string,
   folderPath: string[],
 ): Promise<ImagesetBuffer> {
-  const safe = sanitizePagePart(imageName);
-  const dir  = [...folderPath, `${safe}.imageset`].join('/') + '/';
+  const leafCamel    = toLowerCamel(sanitizePagePart(imageName));
+  const pathSegments = folderPath.map(toCasePathSegment); // lowercased — for Swift case name
 
   const light1x = await lightNode.exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: 1 } });
   const light2x = await lightNode.exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: 2 } });
@@ -549,8 +670,9 @@ async function buildPageImageset(
   }
 
   return {
-    imageName: safe,
-    dir,
+    leafCamel,
+    pathSegments,
+    folderPath, // case-preserving — for placement inside .xcassets
     light1x, light2x,
     dark1x, dark2x,
     lightPath: getNodeFullPath(lightNode),
@@ -633,7 +755,7 @@ figma.ui.onmessage = async (msg: UIToCode) => {
         break;
       }
 
-      for (const b of buffers) emitImageset(b);
+      emitOutputBundle(buffers, msg.setName);
       figma.ui.postMessage({ type: 'exportDone', exported: buffers.length, failed, mode: 'tagged' } as CodeToUI);
       break;
     }
@@ -702,24 +824,28 @@ figma.ui.onmessage = async (msg: UIToCode) => {
         }
       }
 
-      // Duplicate detection — by final imageset name only (folder-agnostic).
-      // This catches: (a) `foo` and `foo-light` co-existing, (b) any two unrelated
-      // candidates sanitizing to the same name, (c) two -dark variants for one core.
-      const byFinalName = new Map<string, SceneNode[]>();
+      // Duplicate detection — by leafCamel (the actual on-disk imageset key,
+      // before the nk_<SetName>_ prefix). This catches: (a) `foo` and `foo-light`
+      // co-existing, (b) any two unrelated candidates collapsing to the same
+      // camelCase, (c) two -dark variants for one core.
+      const byLeafCamel = new Map<string, SceneNode[]>();
+      const keyFor = (coreName: string) => toLowerCamel(sanitizePagePart(coreName));
       for (const j of jobs) {
-        const arr = byFinalName.get(j.finalName) ?? [];
+        const k = keyFor(j.finalName);
+        const arr = byLeafCamel.get(k) ?? [];
         arr.push(j.light);
-        byFinalName.set(j.finalName, arr);
+        byLeafCamel.set(k, arr);
       }
       // Also surface "two -dark candidates for the same core" as a duplicate.
       for (const g of byCore.values()) {
         if (g.darks.length > 1) {
-          const arr = byFinalName.get(sanitizePagePart(g.darks[0].coreName)) ?? [];
+          const k = keyFor(g.darks[0].coreName);
+          const arr = byLeafCamel.get(k) ?? [];
           for (let i = 1; i < g.darks.length; i++) arr.push(g.darks[i].node);
-          byFinalName.set(sanitizePagePart(g.darks[0].coreName), arr);
+          byLeafCamel.set(k, arr);
         }
       }
-      const dupeEntries = [...byFinalName.entries()].filter(([, nodes]) => nodes.length > 1);
+      const dupeEntries = [...byLeafCamel.entries()].filter(([, nodes]) => nodes.length > 1);
       if (dupeEntries.length > 0) {
         const lines = ['Duplicate image names:'];
         for (const [name, nodes] of dupeEntries) {
@@ -751,7 +877,7 @@ figma.ui.onmessage = async (msg: UIToCode) => {
         break;
       }
 
-      for (const b of buffers) emitImageset(b);
+      emitOutputBundle(buffers, msg.setName);
       // Page mode always produces a ZIP, even when empty (per spec).
       figma.ui.postMessage({ type: 'exportDone', exported: buffers.length, failed, mode: 'page' } as CodeToUI);
       break;

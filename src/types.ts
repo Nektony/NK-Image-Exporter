@@ -11,8 +11,8 @@ export type UIToCode =
   | { type: 'unmark'; nodeId: string }
   | { type: 'rename'; nodeId: string; newName: string }
   | { type: 'focus'; nodeId: string }
-  | { type: 'export' }
-  | { type: 'exportPage' };
+  | { type: 'export'; setName: string }
+  | { type: 'exportPage'; setName: string };
 
 // ── Messages: Code → UI ──────────────────────────────────────────────────────
 
