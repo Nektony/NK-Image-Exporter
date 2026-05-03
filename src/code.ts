@@ -486,6 +486,18 @@ function emitOutputBundle(buffers: ImagesetBuffer[], setName: string): void {
     rawValue: b.leafCamel,
   }));
   sendFile(swiftPath, buildSwiftFile(setName, entries));
+
+  // Cached image sizes — sibling to the .xcassets. Keyed by lowercased Swift
+  // case name → light-1x { width, height }. Sorted by key, pretty-printed.
+  const cachePath = `${wrapperPath}${bundleName}_images_sizes.json`;
+  const sizeByKey: Record<string, { width: number; height: number }> = {};
+  for (let i = 0; i < buffers.length; i++) {
+    const dims = readPngDims(buffers[i].light1x);
+    sizeByKey[entries[i].caseName.toLowerCase()] = { width: dims.width, height: dims.height };
+  }
+  const sortedSizes: Record<string, { width: number; height: number }> = {};
+  for (const k of Object.keys(sizeByKey).sort()) sortedSizes[k] = sizeByKey[k];
+  sendFile(cachePath, asciiBytes(JSON.stringify(sortedSizes, null, 2)));
 }
 
 // ── Dark variant via variable-swap (shared by both export modes) ─────────────
