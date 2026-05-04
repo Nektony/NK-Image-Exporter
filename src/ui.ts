@@ -101,7 +101,7 @@ window.onmessage = (event: MessageEvent) => {
       pendingZipFiles[msg.fileName] = new Uint8Array(msg.bytes);
       break;
     case 'exportDone':
-      onExportDone(msg.exported, msg.failed, msg.mode);
+      onExportDone(msg.exported, msg.failed, msg.mode, msg.retinaFixes);
       break;
     case 'exportError':
       onExportError(msg.message);
@@ -344,7 +344,7 @@ function setExportStatus(text: string, kind: 'success' | 'warning' | 'error'): v
   exportStatus.classList.add(kind);
 }
 
-function onExportDone(exported: number, failed: number, mode: 'tagged' | 'page'): void {
+function onExportDone(exported: number, failed: number, mode: 'tagged' | 'page', retinaFixes: string[]): void {
   // Page mode always produces a download (empty ZIP if no candidates).
   // Tagged mode only downloads if at least one image was exported.
   const shouldDownload = mode === 'page' || exported > 0;
@@ -357,9 +357,26 @@ function onExportDone(exported: number, failed: number, mode: 'tagged' | 'page')
 
   if (failed > 0) {
     setExportStatus(`Done — ${exported} exported, ${failed} failed`, 'warning');
-  } else {
-    setExportStatus(`${exported} image${exported !== 1 ? 's' : ''} saved as images.zip`, 'success');
+    setTimeout(() => exportStatus.classList.add('hidden'), 4000);
+    return;
   }
+
+  if (retinaFixes.length > 0) {
+    // Persistent warning — the list needs reading and the designer is meant to
+    // act on it. Stays on screen until the next action, like errors do.
+    const lines = [
+      `${exported} image${exported !== 1 ? 's' : ''} saved, but ${retinaFixes.length} required size correction:`,
+      ...retinaFixes,
+      '',
+      'Cause: the source layer has non-integer width/height (e.g. 24.5×24), so',
+      'Figma\'s 1x and 2x exports round differently. Snap the layer to integer',
+      'pixels — auto-correction adds a costly PNG re-encode and slows the export.',
+    ];
+    setExportStatus(lines.join('\n'), 'warning');
+    return;
+  }
+
+  setExportStatus(`${exported} image${exported !== 1 ? 's' : ''} saved as images.zip`, 'success');
   setTimeout(() => exportStatus.classList.add('hidden'), 4000);
 }
 

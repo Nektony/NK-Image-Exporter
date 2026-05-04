@@ -30,6 +30,6 @@ export interface PluginState {
 export type CodeToUI =
   | ({ type: 'state' } & PluginState)
   | { type: 'exportFile'; fileName: string; bytes: number[] }
-  | { type: 'exportDone'; exported: number; failed: number; mode: 'tagged' | 'page' }
+  | { type: 'exportDone'; exported: number; failed: number; mode: 'tagged' | 'page'; retinaFixes: string[] }
   | { type: 'exportError'; message: string }
   | { type: 'error'; message: string };
