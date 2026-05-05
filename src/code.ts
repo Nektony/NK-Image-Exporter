@@ -257,17 +257,28 @@ function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
 
 // ── Contents.json builder ─────────────────────────────────────────────────────
 
-function buildContentsJson(name: string, hasDark: boolean): Uint8Array {
-  const images: object[] = [
-    { filename: `${name}.png`,    idiom: 'mac', scale: '1x' },
-    { filename: `${name}@2x.png`, idiom: 'mac', scale: '2x' },
-  ];
-  if (hasDark) {
-    images.push(
-      { appearances: [{ appearance: 'luminosity', value: 'dark' }], filename: `${name}~dark.png`,    idiom: 'mac', scale: '1x' },
-      { appearances: [{ appearance: 'luminosity', value: 'dark' }], filename: `${name}~dark@2x.png`, idiom: 'mac', scale: '2x' },
-    );
-  }
+function buildContentsJson(name: string, hasDark: boolean, density: 'both' | '1x' | '2x'): Uint8Array {
+  // For density-marked assets the missing-scale slot still appears in the
+  // images array, but without a `filename` key — Xcode treats it as an
+  // explicitly empty slot. The corresponding PNG is also not written to disk.
+  const has1x = density === 'both' || density === '1x';
+  const has2x = density === 'both' || density === '2x';
+  const slot = (kind: 'light1x' | 'light2x' | 'dark1x' | 'dark2x'): object => {
+    const isDark = kind === 'dark1x' || kind === 'dark2x';
+    const is2x   = kind === 'light2x' || kind === 'dark2x';
+    const present = is2x ? has2x : has1x;
+    const filename = present
+      ? `${name}${isDark ? '~dark' : ''}${is2x ? '@2x' : ''}.png`
+      : null;
+    const obj: any = { idiom: 'mac', scale: is2x ? '2x' : '1x' };
+    if (isDark) obj.appearances = [{ appearance: 'luminosity', value: 'dark' }];
+    if (filename !== null) obj.filename = filename;
+    return obj;
+  };
+
+  const images: object[] = [slot('light1x'), slot('light2x')];
+  if (hasDark) images.push(slot('dark1x'), slot('dark2x'));
+
   const json = JSON.stringify({ images, info: { author: 'xcode', version: 1 } }, null, 2);
   const bytes = new Uint8Array(json.length);
   for (let i = 0; i < json.length; i++) bytes[i] = json.charCodeAt(i);
@@ -539,6 +550,9 @@ function fixRetinaOffByOne(retina2x: Uint8Array, expectedW: number, expectedH: n
  */
 function normalizeImagesetRetina(b: ImagesetBuffer): string[] {
   const fixes: string[] = [];
+  // Off-by-1 retina mismatch is only meaningful when both scales exist.
+  // 1x-only or 2x-only assets have no pair to drift against — skip.
+  if (b.density !== 'both' || !b.light1x || !b.light2x) return fixes;
 
   const l1 = readPngDims(b.light1x);
   const oldL2 = readPngDims(b.light2x);
@@ -643,13 +657,21 @@ function buildSwiftFile(setName: string, entries: SwiftEnumEntry[]): Uint8Array 
 
 // ── Imageset buffers ─────────────────────────────────────────────────────────
 
+/**
+ * Ship-density of an imageset. Page-mode candidates can carry an `1x/` or
+ * `2x/` marker after the `img_exp/` prefix to opt out of the retina pair;
+ * tagged-mode imagesets are always `both`.
+ */
+type Density = 'both' | '1x' | '2x';
+
 interface ImagesetBuffer {
   leafCamel: string;       // lowerCamelCase form of original leaf — Swift raw value & disk-leaf base
   pathSegments: string[];  // lowercased Figma-ancestor names for Swift case name; empty in tagged mode
   folderPath: string[];    // case-preserving sanitized folder names for placement INSIDE .xcassets; empty in tagged mode
-  light1x: Uint8Array;
-  light2x: Uint8Array;
-  dark1x: Uint8Array | null;
+  density: Density;
+  light1x: Uint8Array | null; // null when density === '2x'
+  light2x: Uint8Array | null; // null when density === '1x'
+  dark1x: Uint8Array | null;  // also null when no dark variant exists
   dark2x: Uint8Array | null;
   lightPath: string;       // human-readable hierarchy path for error messages
   darkPath: string | null; // null when dark came from variable-swap (clone of light)
@@ -657,34 +679,46 @@ interface ImagesetBuffer {
 
 /**
  * Returns a list of human-readable error messages (empty if all sizes are valid).
- * Each PNG must satisfy: 2x dims === 1x dims × 2; light dims === dark dims.
+ *   - For density `both`: 2x dims === 1x dims × 2; light dims === dark dims.
+ *   - For density `1x` / `2x`: only the present scale exists, so the retina-double
+ *     check is skipped; light dims === dark dims is checked at whichever scale
+ *     is actually emitted.
  */
 function validateImagesetSizes(b: ImagesetBuffer): string[] {
   const errors: string[] = [];
-  const l1 = readPngDims(b.light1x);
-  const l2 = readPngDims(b.light2x);
 
-  if (l2.width !== l1.width * 2 || l2.height !== l1.height * 2) {
-    errors.push(
-      `  ${b.lightPath} (light): 1x is ${l1.width}×${l1.height}, ` +
-      `2x is ${l2.width}×${l2.height} (expected ${l1.width * 2}×${l1.height * 2})`,
-    );
-  }
-
-  if (b.dark1x && b.dark2x) {
-    const d1 = readPngDims(b.dark1x);
-    const d2 = readPngDims(b.dark2x);
-    const darkLabel = b.darkPath ? `${b.darkPath} (dark)` : `${b.lightPath} (dark variant)`;
-
-    if (d2.width !== d1.width * 2 || d2.height !== d1.height * 2) {
+  // Retina-double check (density `both` only)
+  if (b.density === 'both' && b.light1x && b.light2x) {
+    const l1 = readPngDims(b.light1x);
+    const l2 = readPngDims(b.light2x);
+    if (l2.width !== l1.width * 2 || l2.height !== l1.height * 2) {
       errors.push(
-        `  ${darkLabel}: 1x is ${d1.width}×${d1.height}, ` +
-        `2x is ${d2.width}×${d2.height} (expected ${d1.width * 2}×${d1.height * 2})`,
+        `  ${b.lightPath} (light): 1x is ${l1.width}×${l1.height}, ` +
+        `2x is ${l2.width}×${l2.height} (expected ${l1.width * 2}×${l1.height * 2})`,
       );
     }
-    if (d1.width !== l1.width || d1.height !== l1.height) {
+    if (b.dark1x && b.dark2x) {
+      const d1 = readPngDims(b.dark1x);
+      const d2 = readPngDims(b.dark2x);
+      const darkLabel = b.darkPath ? `${b.darkPath} (dark)` : `${b.lightPath} (dark variant)`;
+      if (d2.width !== d1.width * 2 || d2.height !== d1.height * 2) {
+        errors.push(
+          `  ${darkLabel}: 1x is ${d1.width}×${d1.height}, ` +
+          `2x is ${d2.width}×${d2.height} (expected ${d1.width * 2}×${d1.height * 2})`,
+        );
+      }
+    }
+  }
+
+  // Light dims === dark dims (compared at whichever density is present)
+  const lightForDimCheck = b.light1x ?? b.light2x;
+  const darkForDimCheck  = b.dark1x  ?? b.dark2x;
+  if (lightForDimCheck && darkForDimCheck) {
+    const l = readPngDims(lightForDimCheck);
+    const d = readPngDims(darkForDimCheck);
+    if (l.width !== d.width || l.height !== d.height) {
       errors.push(
-        `  ${b.lightPath}: light is ${l1.width}×${l1.height} but dark is ${d1.width}×${d1.height}` +
+        `  ${b.lightPath}: light is ${l.width}×${l.height} but dark is ${d.width}×${d.height}` +
         (b.darkPath ? ` (dark from ${b.darkPath})` : ''),
       );
     }
@@ -727,39 +761,68 @@ function emitOutputBundle(buffers: ImagesetBuffer[], setName: string): void {
     sendFile(`${xcassetsPath}${f}${f ? '/' : ''}Contents.json`, groupJson);
   }
 
-  // Each imageset placed under its folderPath inside .xcassets.
+  // Each imageset placed under its folderPath inside .xcassets. Density-aware:
+  // single-density assets only emit the PNG for the present scale; the missing
+  // scale's slot in Contents.json carries no `filename` (see buildContentsJson).
   for (const b of buffers) {
     const diskLeaf = diskLeafPrefix + b.leafCamel;
     const folder   = b.folderPath.length > 0 ? b.folderPath.join('/') + '/' : '';
     const dir      = `${xcassetsPath}${folder}${diskLeaf}.imageset/`;
-    const hasDark  = b.dark1x !== null;
-    sendFile(dir + `${diskLeaf}.png`,    b.light1x);
-    sendFile(dir + `${diskLeaf}@2x.png`, b.light2x);
+    const hasDark  = b.dark1x !== null || b.dark2x !== null;
+    if (b.light1x) sendFile(dir + `${diskLeaf}.png`,    b.light1x);
+    if (b.light2x) sendFile(dir + `${diskLeaf}@2x.png`, b.light2x);
     if (hasDark) {
-      sendFile(dir + `${diskLeaf}~dark.png`,    b.dark1x!);
-      sendFile(dir + `${diskLeaf}~dark@2x.png`, b.dark2x!);
+      if (b.dark1x) sendFile(dir + `${diskLeaf}~dark.png`,    b.dark1x);
+      if (b.dark2x) sendFile(dir + `${diskLeaf}~dark@2x.png`, b.dark2x);
     }
-    sendFile(dir + 'Contents.json', buildContentsJson(diskLeaf, hasDark));
+    sendFile(dir + 'Contents.json', buildContentsJson(diskLeaf, hasDark, b.density));
   }
 
-  // Swift enum file (always emitted, even if entries is empty).
+  // Swift enum file (always emitted, even if entries is empty). Cases are
+  // sorted by `caseName.toLowerCase()` so the .swift file diffs cleanly
+  // between exports — the source-walk order is intentionally not preserved.
   const entries: SwiftEnumEntry[] = buffers.map(b => ({
     caseName: buildSwiftCaseName(b.pathSegments, b.leafCamel),
     rawValue: b.leafCamel,
   }));
+  entries.sort((a, b) => {
+    const al = a.caseName.toLowerCase();
+    const bl = b.caseName.toLowerCase();
+    return al < bl ? -1 : al > bl ? 1 : 0;
+  });
   sendFile(swiftPath, buildSwiftFile(setName, entries));
 
-  // Cached image sizes — sibling to the .xcassets. Keyed by lowercased Swift
-  // case name → light-1x { width, height }. Sorted by key, pretty-printed.
+  // Sizes manifest — sibling to the .xcassets. Keyed by lowercased Swift case
+  // name → { width, height } in **points** (logical 1x size), sorted, pretty-
+  // printed. For density `2x` (no 1x source available), the point size is the
+  // 2x PNG dims divided by two.
   const cachePath = `${wrapperPath}${bundleName}_images_sizes.json`;
   const sizeByKey: Record<string, { width: number; height: number }> = {};
-  for (let i = 0; i < buffers.length; i++) {
-    const dims = readPngDims(buffers[i].light1x);
-    sizeByKey[entries[i].caseName.toLowerCase()] = { width: dims.width, height: dims.height };
+  for (const b of buffers) {
+    const caseKey = buildSwiftCaseName(b.pathSegments, b.leafCamel).toLowerCase();
+    sizeByKey[caseKey] = pointSizeForBuffer(b);
   }
   const sortedSizes: Record<string, { width: number; height: number }> = {};
   for (const k of Object.keys(sizeByKey).sort()) sortedSizes[k] = sizeByKey[k];
   sendFile(cachePath, asciiBytes(JSON.stringify(sortedSizes, null, 2)));
+}
+
+/**
+ * Logical (point) size of an imageset for the sizes manifest:
+ *   - density `both` or `1x`: read directly from light-1x PNG dims.
+ *   - density `2x`: read 2x PNG dims and divide by 2 (no 1x exists).
+ */
+function pointSizeForBuffer(b: ImagesetBuffer): { width: number; height: number } {
+  if (b.density === '2x' && b.light2x) {
+    const d = readPngDims(b.light2x);
+    return { width: d.width / 2, height: d.height / 2 };
+  }
+  if (b.light1x) return readPngDims(b.light1x);
+  if (b.light2x) {
+    const d = readPngDims(b.light2x);
+    return { width: d.width / 2, height: d.height / 2 };
+  }
+  return { width: 0, height: 0 };
 }
 
 // ── Dark variant via variable-swap (shared by both export modes) ─────────────
@@ -768,11 +831,16 @@ function emitOutputBundle(buffers: ImagesetBuffer[], setName: string): void {
  * Render a node's dark variant by cloning, switching its variable bindings to
  * dark, exporting, and removing the clone. Returns null if the file has no
  * dark variables at all OR if the dark render is bit-identical to the light.
+ *
+ * `density` controls which scales are exported and which `lightCompare` byte
+ * blob is read for the equality check (we compare at whichever scale is
+ * actually emitted).
  */
 async function renderDarkViaVariables(
   node: SceneNode,
-  light1x: Uint8Array,
-): Promise<{ dark1x: Uint8Array; dark2x: Uint8Array } | null> {
+  lightCompare: Uint8Array,
+  density: Density,
+): Promise<{ dark1x: Uint8Array | null; dark2x: Uint8Array | null } | null> {
   const darkCollections = findAllDarkModeCollections();
   const usesDarkScheme  = hasDarkScheme();
 
@@ -801,11 +869,15 @@ async function renderDarkViaVariables(
 
     if (!darkReady) return null;
 
+    const need1x = density === 'both' || density === '1x';
+    const need2x = density === 'both' || density === '2x';
     const [d1x, d2x] = await Promise.all([
-      clone.exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: 1 } }),
-      clone.exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: 2 } }),
+      need1x ? clone.exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: 1 } }) : Promise.resolve(null),
+      need2x ? clone.exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: 2 } }) : Promise.resolve(null),
     ]);
-    if (bytesEqual(light1x, d1x)) return null;
+    // Equality check uses whichever scale was emitted at the comparison density.
+    const darkCompare = need1x ? d1x : d2x;
+    if (darkCompare && bytesEqual(lightCompare, darkCompare)) return null;
 
     return { dark1x: d1x, dark2x: d2x };
   } finally {
@@ -821,11 +893,12 @@ async function buildTaggedImageset(node: SceneNode, imageName: string): Promise<
     node.exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: 1 } }),
     node.exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: 2 } }),
   ]);
-  const dark = await renderDarkViaVariables(node, light1x);
+  const dark = await renderDarkViaVariables(node, light1x, 'both');
   return {
     leafCamel,
     pathSegments: [], // tagged mode has no folder hierarchy
     folderPath: [],
+    density: 'both', // tagged mode never carries density markers
     light1x, light2x,
     dark1x: dark?.dark1x ?? null,
     dark2x: dark?.dark2x ?? null,
@@ -837,72 +910,197 @@ async function buildTaggedImageset(node: SceneNode, imageName: string): Promise<
 // ── Page-export mode ─────────────────────────────────────────────────────────
 
 const PAGE_EXPORT_PREFIX = 'img_exp/';
+const SETNAME_FRAME_PREFIX = 'img_exp/SetName:';
+const DENSITY_1X_MARKER = '1x/';
+const DENSITY_2X_MARKER = '2x/';
 const DARK_SUFFIX  = '-dark';
 const LIGHT_SUFFIX = '-light';
 
 /**
  * Naming scheme for an `img_exp/` candidate:
+ *   - Optional density marker after the prefix: `1x/` or `2x/` (single-density
+ *     opt-out). No marker = density `both` (current default behaviour).
  *   - `light-implicit` — no suffix (e.g. `img_exp/foo`); dark is optional, may
  *     fall back to variable-swap if no `-dark` sibling exists.
  *   - `light-explicit` — `-light` suffix (e.g. `img_exp/foo-light`); a `-dark`
  *     sibling is REQUIRED — no fallback.
  *   - `dark`           — `-dark` suffix; must have a matching light counterpart
- *     (either implicit or explicit).
+ *     (either implicit or explicit) at the same density.
  *
- * `coreName` is the node name with the `img_exp/` prefix and the kind-suffix
- * (if any) both stripped. It's the key that pairs lights with darks and
- * defines the final imageset name (after sanitization).
+ * `coreName` is the node name with the `img_exp/` prefix, the optional density
+ * marker, and the kind-suffix (if any) all stripped. The pairing key is the
+ * tuple `(coreName, density)` and the final imageset name is just `coreName`.
  */
 type CandidateKind = 'light-implicit' | 'light-explicit' | 'dark';
 
 interface PageExportCandidate {
   node: SceneNode;
-  fullName: string;  // e.g. "img_exp/foo-light" — exact node name as in Figma
+  fullName: string;  // e.g. "img_exp/1x/foo-light" — exact node name as in Figma
   kind: CandidateKind;
-  coreName: string;  // e.g. "foo" — pairing key & basis for final imageset name
+  density: Density;
+  coreName: string;  // e.g. "foo" — pairing key (with density) & basis for final imageset name
 }
 
 function classifyCandidate(node: SceneNode): PageExportCandidate {
   const fullName = node.name;
-  const afterPrefix = fullName.slice(PAGE_EXPORT_PREFIX.length);
-  if (afterPrefix.endsWith(DARK_SUFFIX)) {
-    return { node, fullName, kind: 'dark',
-             coreName: afterPrefix.slice(0, -DARK_SUFFIX.length) };
+  let rest = fullName.slice(PAGE_EXPORT_PREFIX.length);
+  let density: Density = 'both';
+  if (rest.startsWith(DENSITY_1X_MARKER)) {
+    density = '1x';
+    rest = rest.slice(DENSITY_1X_MARKER.length);
+  } else if (rest.startsWith(DENSITY_2X_MARKER)) {
+    density = '2x';
+    rest = rest.slice(DENSITY_2X_MARKER.length);
   }
-  if (afterPrefix.endsWith(LIGHT_SUFFIX)) {
-    return { node, fullName, kind: 'light-explicit',
-             coreName: afterPrefix.slice(0, -LIGHT_SUFFIX.length) };
+  if (rest.endsWith(DARK_SUFFIX)) {
+    return { node, fullName, kind: 'dark', density,
+             coreName: rest.slice(0, -DARK_SUFFIX.length) };
   }
-  return { node, fullName, kind: 'light-implicit', coreName: afterPrefix };
+  if (rest.endsWith(LIGHT_SUFFIX)) {
+    return { node, fullName, kind: 'light-explicit', density,
+             coreName: rest.slice(0, -LIGHT_SUFFIX.length) };
+  }
+  return { node, fullName, kind: 'light-implicit', density, coreName: rest };
 }
 
 /**
- * Walk the current page and collect every node whose name starts with the
- * `img_exp/` prefix. Do NOT recurse into matching nodes — they are leaves.
+ * `img_exp/SetName:<X>` (with optional trailing `/`) marks a frame at the
+ * page root as a wrapper for a named set. Returns the trimmed `<X>` — the
+ * caller then validates it as a Swift identifier (or treats it as invalid).
+ * Returns `null` for any other layer name.
  */
-function collectPageExportCandidates(): PageExportCandidate[] {
-  const out: PageExportCandidate[] = [];
-  function walk(parent: BaseNode & ChildrenMixin): void {
-    for (const child of parent.children) {
+function parseSetNameFrame(node: SceneNode): string | null {
+  if (!node.name.startsWith(SETNAME_FRAME_PREFIX)) return null;
+  let raw = node.name.slice(SETNAME_FRAME_PREFIX.length);
+  if (raw.endsWith('/')) raw = raw.slice(0, -1);
+  return raw;
+}
+
+// Same Swift-identifier rules as the UI's Set Name input. Multi-set mode
+// derives SetName from frame names, so the validator lives in code.ts too.
+const SWIFT_RESERVED = new Set([
+  'class', 'struct', 'enum', 'func', 'var', 'let', 'extension', 'protocol',
+  'import', 'typealias', 'init', 'deinit', 'case', 'default', 'if', 'else',
+  'for', 'while', 'do', 'switch', 'return', 'break', 'continue', 'throw',
+  'throws', 'rethrows', 'try', 'catch', 'as', 'is', 'in', 'nil', 'true',
+  'false', 'self', 'Self', 'super', 'where', 'guard', 'defer', 'repeat',
+  'fallthrough', 'inout', 'private', 'public', 'internal', 'fileprivate',
+  'open', 'final', 'static', 'dynamic', 'lazy', 'weak', 'unowned',
+  'mutating', 'nonmutating', 'convenience', 'required', 'optional',
+  'indirect', 'infix', 'prefix', 'postfix', 'precedencegroup',
+  'associatedtype', 'subscript', 'operator', 'await', 'async', 'actor',
+  'any', 'some', 'Type', 'Protocol',
+]);
+
+function isValidSetNameValue(s: string): boolean {
+  if (s === '') return false;
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(s)) return false;
+  if (SWIFT_RESERVED.has(s)) return false;
+  return true;
+}
+
+interface SetWrapperFrame {
+  node: SceneNode;
+  setName: string; // raw — caller must still validate via isValidSetNameValue
+}
+
+/**
+ * Scan the current page for all candidates and detect set-wrapper frames at
+ * the page root. The returned shape is intentionally rich enough to drive
+ * both single-set and multi-set branches plus all the multi-set-specific
+ * validators in one pass.
+ */
+interface PageScanResult {
+  setWrappersAtRoot: SetWrapperFrame[];
+  candidatesByOwner: Map<SceneNode | null, PageExportCandidate[]>;
+  // owner === null  → candidate is loose at the page root (or a non-wrapper ancestor)
+  // owner === frame → candidate is a descendant of that root-level set-wrapper
+  nestedWrappers: SceneNode[];        // any set-wrapper frame found below the root
+  invalidSetNames: SetWrapperFrame[]; // root-level wrappers whose <SetName> fails the Swift identifier check
+  duplicateWrappers: Map<string, SetWrapperFrame[]>; // setName → ≥2 wrappers
+}
+
+function scanPage(): PageScanResult {
+  const setWrappersAtRoot: SetWrapperFrame[] = [];
+  const candidatesByOwner = new Map<SceneNode | null, PageExportCandidate[]>();
+  const nestedWrappers: SceneNode[] = [];
+
+  function pushCandidate(owner: SceneNode | null, c: PageExportCandidate): void {
+    let arr = candidatesByOwner.get(owner);
+    if (!arr) { arr = []; candidatesByOwner.set(owner, arr); }
+    arr.push(c);
+  }
+
+  // 1. Walk the page root: each direct child is either a set-wrapper frame or
+  //    something we descend into (with owner=null).
+  for (const child of figma.currentPage.children) {
+    const setName = parseSetNameFrame(child as SceneNode);
+    if (setName !== null) {
+      setWrappersAtRoot.push({ node: child as SceneNode, setName });
+      // Walk the wrapper's descendants attributing candidates to this owner.
+      walkUnder(child as SceneNode, child as SceneNode);
+    } else if (child.name.startsWith(PAGE_EXPORT_PREFIX)) {
+      // Loose img_exp at root (no owner). In single-set mode this is normal;
+      // in multi-set mode the caller will surface it as an error.
+      pushCandidate(null, classifyCandidate(child as SceneNode));
+    } else if ('children' in child) {
+      walkUnder(child as SceneNode, null);
+    }
+  }
+
+  function walkUnder(parent: SceneNode, owner: SceneNode | null): void {
+    if (!('children' in parent)) return;
+    for (const child of (parent as BaseNode & ChildrenMixin).children) {
+      // A nested set-wrapper is always an error — flag and don't recurse to
+      // avoid double-counting its descendants.
+      if (parseSetNameFrame(child as SceneNode) !== null) {
+        nestedWrappers.push(child as SceneNode);
+        continue;
+      }
       if (child.name.startsWith(PAGE_EXPORT_PREFIX)) {
-        out.push(classifyCandidate(child));
+        pushCandidate(owner, classifyCandidate(child as SceneNode));
       } else if ('children' in child) {
-        walk(child as BaseNode & ChildrenMixin);
+        walkUnder(child as SceneNode, owner);
       }
     }
   }
-  walk(figma.currentPage);
-  return out;
+
+  // Validate set-wrapper names + collect duplicates.
+  const invalidSetNames: SetWrapperFrame[] = [];
+  const bySetName = new Map<string, SetWrapperFrame[]>();
+  for (const w of setWrappersAtRoot) {
+    if (!isValidSetNameValue(w.setName)) invalidSetNames.push(w);
+    const arr = bySetName.get(w.setName) ?? [];
+    arr.push(w);
+    bySetName.set(w.setName, arr);
+  }
+  const duplicateWrappers = new Map<string, SetWrapperFrame[]>();
+  for (const [name, arr] of bySetName) if (arr.length > 1) duplicateWrappers.set(name, arr);
+
+  return { setWrappersAtRoot, candidatesByOwner, nestedWrappers, invalidSetNames, duplicateWrappers };
+}
+
+/**
+ * Legacy single-set helper — flatten every candidate from a scan into one
+ * list, regardless of owner. Used by the single-set page-export branch.
+ */
+function flattenCandidates(scan: PageScanResult): PageExportCandidate[] {
+  const all: PageExportCandidate[] = [];
+  for (const arr of scan.candidatesByOwner.values()) all.push(...arr);
+  return all;
 }
 
 /**
  * Build the folder-path segments from the node's parent chain up to (but not
- * including) the page. Innermost ancestor → innermost (last) segment.
+ * including) the given `boundary` node — typically the page (single-set
+ * mode) or a set-wrapper frame (multi-set mode, so the wrapper itself is
+ * not part of the imageset's path). Innermost ancestor → innermost (last)
+ * segment.
  */
-function getPagePath(node: SceneNode): string[] {
+function getPagePath(node: SceneNode, boundary: BaseNode): string[] {
   const parts: string[] = [];
   let cur: BaseNode | null = node.parent;
-  while (cur && cur.type !== 'PAGE') {
+  while (cur && cur !== boundary && cur.type !== 'PAGE') {
     parts.unshift(sanitizePagePart(cur.name));
     cur = cur.parent;
   }
@@ -924,42 +1122,214 @@ function getNodeFullPath(node: BaseNode): string {
   return parts.join(' > ');
 }
 
+/**
+ * One ready-to-build job in the page-export pipeline. Produced by `planSet`
+ * after pairing/validation; consumed by `buildPageImageset` to do the actual
+ * Figma export.
+ */
+interface PageBuildJob {
+  light: SceneNode;
+  dark: SceneNode | null;
+  finalName: string;     // sanitized coreName, basis for the imageset folder & Swift case
+  folder: string[];      // case-preserving sanitized folder names inside .xcassets
+  density: Density;
+}
+
+interface SetPlan {
+  setName: string;
+  errors: string[];
+  jobs: PageBuildJob[];
+}
+
+/**
+ * For a single set (one wrapper-frame's descendants OR the whole page in
+ * single-set mode), pair light/dark candidates by `(coreName, density)`,
+ * surface every per-set validation error, and emit the buildable jobs.
+ *
+ * `boundary` is the ancestor at which `getPagePath` should stop — the wrapper
+ * frame in multi-set mode, the page in single-set mode. The wrapper itself is
+ * therefore not part of any imageset's hierarchy path.
+ */
+function planSet(
+  setName: string,
+  candidates: PageExportCandidate[],
+  boundary: BaseNode,
+): SetPlan {
+  const errors: string[] = [];
+
+  // Group lights and darks separately, indexed by coreName then density —
+  // lets us surface "density mismatch in light/dark pair" cleanly before the
+  // pair-by-key step would silently treat them as orphans.
+  type DensityMap = Map<Density, PageExportCandidate[]>;
+  const lightsByCore = new Map<string, DensityMap>();
+  const darksByCore  = new Map<string, DensityMap>();
+  function pushInto(map: Map<string, DensityMap>, c: PageExportCandidate): void {
+    let perCore = map.get(c.coreName);
+    if (!perCore) { perCore = new Map<Density, PageExportCandidate[]>(); map.set(c.coreName, perCore); }
+    const arr = perCore.get(c.density) ?? [];
+    arr.push(c);
+    perCore.set(c.density, arr);
+  }
+  for (const c of candidates) {
+    if (c.kind === 'dark') pushInto(darksByCore, c);
+    else pushInto(lightsByCore, c);
+  }
+
+  // Density mismatch: this coreName has at least one light AND at least one
+  // dark, but no shared density between them. Reported per-mismatch with all
+  // involved layers so the designer can find both halves.
+  const densityMismatchLines: string[] = [];
+  for (const [coreName, darkDensities] of darksByCore) {
+    const lightDensities = lightsByCore.get(coreName);
+    if (!lightDensities || lightDensities.size === 0) continue; // pure orphan-dark — handled below
+    for (const [darkDensity, darkArr] of darkDensities) {
+      if (lightDensities.has(darkDensity)) continue; // matched
+      const lightSummary = [...lightDensities.keys()].join('/');
+      densityMismatchLines.push(
+        `  "${coreName}": light has density ${lightSummary}, dark has density ${darkDensity}`,
+      );
+      for (const arr of lightDensities.values()) {
+        for (const l of arr) densityMismatchLines.push(`    ${getNodeFullPath(l.node)}`);
+      }
+      for (const d of darkArr) densityMismatchLines.push(`    ${getNodeFullPath(d.node)}`);
+    }
+  }
+  if (densityMismatchLines.length > 0) {
+    errors.push('Density mismatch in light/dark pair:');
+    errors.push(...densityMismatchLines);
+  }
+
+  // Orphan-dark: a dark candidate whose coreName has no light candidate at all
+  // (any density). If the coreName had lights at a different density, we
+  // already reported it as a density mismatch and skip here.
+  const darkOrphanLines: string[] = [];
+  for (const [coreName, darkDensities] of darksByCore) {
+    const lightDensities = lightsByCore.get(coreName);
+    if (lightDensities && lightDensities.size > 0) continue;
+    for (const arr of darkDensities.values()) {
+      for (const d of arr) darkOrphanLines.push(`  ${getNodeFullPath(d.node)}`);
+    }
+  }
+  if (darkOrphanLines.length > 0) {
+    errors.push('Dark layers without a light counterpart:');
+    errors.push(...darkOrphanLines);
+  }
+
+  // Orphan-light: a light-explicit candidate whose `(coreName, density)` has
+  // no dark counterpart. Implicit-light candidates are not orphan-checked —
+  // they fall back to the variable-swap dark pipeline.
+  const lightOrphanLines: string[] = [];
+  for (const [coreName, lightDensities] of lightsByCore) {
+    const darkDensities = darksByCore.get(coreName);
+    for (const [density, arr] of lightDensities) {
+      const hasDarkAtSameDensity = darkDensities?.has(density) ?? false;
+      if (hasDarkAtSameDensity) continue;
+      for (const l of arr) {
+        if (l.kind === 'light-explicit') lightOrphanLines.push(`  ${getNodeFullPath(l.node)}`);
+      }
+    }
+  }
+  if (lightOrphanLines.length > 0) {
+    errors.push('Light layers without a dark counterpart:');
+    errors.push(...lightOrphanLines);
+  }
+
+  // Build jobs from light candidates only (each pairs with the matching dark
+  // at the same density, if any).
+  const jobs: PageBuildJob[] = [];
+  for (const [coreName, lightDensities] of lightsByCore) {
+    const darkDensities = darksByCore.get(coreName);
+    for (const [density, lights] of lightDensities) {
+      const darkArr = darkDensities?.get(density) ?? [];
+      const darkNode = darkArr[0]?.node ?? null;
+      for (const l of lights) {
+        jobs.push({
+          light:     l.node,
+          dark:      darkNode,
+          finalName: sanitizePagePart(l.coreName),
+          folder:    getPagePath(l.node, boundary),
+          density,
+        });
+      }
+    }
+  }
+
+  // Duplicate image names — by leafCamel. Catches:
+  //   - foo + foo-light (collapse to imageset "foo")
+  //   - foo + 1x/foo (different density, same imageset name)
+  //   - 1x/foo + 2x/foo (different density, same imageset name)
+  //   - any two unrelated cores collapsing to the same camelCase
+  //   - two -dark candidates for one core+density
+  const byLeafCamel = new Map<string, SceneNode[]>();
+  const keyFor = (s: string) => toLowerCamel(sanitizePagePart(s));
+  for (const j of jobs) {
+    const k = keyFor(j.finalName);
+    const arr = byLeafCamel.get(k) ?? [];
+    arr.push(j.light);
+    byLeafCamel.set(k, arr);
+  }
+  for (const [coreName, darkDensities] of darksByCore) {
+    for (const arr of darkDensities.values()) {
+      if (arr.length > 1) {
+        const k = keyFor(coreName);
+        const dupes = byLeafCamel.get(k) ?? [];
+        for (let i = 1; i < arr.length; i++) dupes.push(arr[i].node);
+        byLeafCamel.set(k, dupes);
+      }
+    }
+  }
+  const dupeEntries = [...byLeafCamel.entries()].filter(([, nodes]) => nodes.length > 1);
+  if (dupeEntries.length > 0) {
+    errors.push('Duplicate image names:');
+    for (const [name, nodes] of dupeEntries) {
+      errors.push(`  "${name}":`);
+      for (const n of nodes) errors.push(`    ${getNodeFullPath(n)}`);
+    }
+  }
+
+  return { setName, errors, jobs };
+}
+
 async function buildPageImageset(
   lightNode: SceneNode,
   darkNode: SceneNode | null,
   imageName: string,
   folderPath: string[],
+  density: Density,
 ): Promise<ImagesetBuffer> {
   const leafCamel    = toLowerCamel(sanitizePagePart(imageName));
   const pathSegments = folderPath.map(toCasePathSegment); // lowercased — for Swift case name
 
-  let light1x: Uint8Array;
-  let light2x: Uint8Array;
+  const need1x = density === 'both' || density === '1x';
+  const need2x = density === 'both' || density === '2x';
+
+  const [light1x, light2x] = await Promise.all([
+    need1x ? lightNode.exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: 1 } }) : Promise.resolve(null),
+    need2x ? lightNode.exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: 2 } }) : Promise.resolve(null),
+  ]);
+
   let dark1x: Uint8Array | null = null;
   let dark2x: Uint8Array | null = null;
 
   if (darkNode) {
-    // Explicit -dark sibling — all four exports are independent, so kick them
-    // off together.
-    [light1x, light2x, dark1x, dark2x] = await Promise.all([
-      lightNode.exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: 1 } }),
-      lightNode.exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: 2 } }),
-      darkNode.exportAsync({  format: 'PNG', constraint: { type: 'SCALE', value: 1 } }),
-      darkNode.exportAsync({  format: 'PNG', constraint: { type: 'SCALE', value: 2 } }),
+    [dark1x, dark2x] = await Promise.all([
+      need1x ? darkNode.exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: 1 } }) : Promise.resolve(null),
+      need2x ? darkNode.exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: 2 } }) : Promise.resolve(null),
     ]);
   } else {
-    [light1x, light2x] = await Promise.all([
-      lightNode.exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: 1 } }),
-      lightNode.exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: 2 } }),
-    ]);
-    const dark = await renderDarkViaVariables(lightNode, light1x);
-    if (dark) { dark1x = dark.dark1x; dark2x = dark.dark2x; }
+    // Variable-swap fallback: needs a "compare" blob at whichever density we emit.
+    const lightCompare = need1x ? light1x : light2x;
+    if (lightCompare) {
+      const dark = await renderDarkViaVariables(lightNode, lightCompare, density);
+      if (dark) { dark1x = dark.dark1x; dark2x = dark.dark2x; }
+    }
   }
 
   return {
     leafCamel,
     pathSegments,
     folderPath, // case-preserving — for placement inside .xcassets
+    density,
     light1x, light2x,
     dark1x, dark2x,
     lightPath: getNodeFullPath(lightNode),
@@ -1082,116 +1452,113 @@ figma.ui.onmessage = async (msg: UIToCode) => {
 
     case 'exportPage': {
       purgeOrphanClones();
-      const candidates = collectPageExportCandidates();
+      const scan = scanPage();
 
-      // Group candidates by their pairing key (coreName) so we can validate
-      // light/dark companionship and build jobs in a single pass.
-      interface Group { lights: PageExportCandidate[]; darks: PageExportCandidate[]; }
-      const byCore = new Map<string, Group>();
-      for (const c of candidates) {
-        let g = byCore.get(c.coreName);
-        if (!g) { g = { lights: [], darks: [] }; byCore.set(c.coreName, g); }
-        if (c.kind === 'dark') g.darks.push(c);
-        else g.lights.push(c);
+      // ── Multi-set-specific validation ───────────────────────────────────
+      // Only fires when at least one set-wrapper frame is present at root.
+      const blocking: string[][] = [];
+      if (scan.setWrappersAtRoot.length > 0) {
+        const looseAtRoot = scan.candidatesByOwner.get(null) ?? [];
+        if (looseAtRoot.length > 0) {
+          const lines = ['Loose img_exp at root in multi-set mode (use either single-set or multi-set, not both):'];
+          for (const c of looseAtRoot) lines.push(`  ${getNodeFullPath(c.node)}`);
+          blocking.push(lines);
+        }
+        if (scan.nestedWrappers.length > 0) {
+          const lines = ['Nested SetName frame (must be at page root only):'];
+          for (const n of scan.nestedWrappers) lines.push(`  ${getNodeFullPath(n)}`);
+          blocking.push(lines);
+        }
+        if (scan.duplicateWrappers.size > 0) {
+          const lines = ['Duplicate set name:'];
+          for (const [name, wrappers] of scan.duplicateWrappers) {
+            lines.push(`  "${name}":`);
+            for (const w of wrappers) lines.push(`    ${getNodeFullPath(w.node)}`);
+          }
+          blocking.push(lines);
+        }
+        if (scan.invalidSetNames.length > 0) {
+          const lines = ['Invalid set name:'];
+          for (const w of scan.invalidSetNames) {
+            lines.push(`  ${getNodeFullPath(w.node)} ("${w.setName}" must match ^[A-Za-z_][A-Za-z0-9_]*$, not a Swift reserved word)`);
+          }
+          blocking.push(lines);
+        }
+      }
+      if (blocking.length > 0) {
+        figma.ui.postMessage({
+          type: 'exportError',
+          message: blocking.map(arr => arr.join('\n')).join('\n\n'),
+        } as CodeToUI);
+        break;
       }
 
-      // Orphan-dark check — a -dark candidate must have at least one light
-      // counterpart (implicit OR -light explicit) sharing its coreName.
-      const darkOrphans: SceneNode[] = [];
-      // Orphan-light check — a -light candidate must have a -dark counterpart.
-      const lightOrphans: SceneNode[] = [];
-      for (const g of byCore.values()) {
-        if (g.darks.length > 0 && g.lights.length === 0) {
-          for (const d of g.darks) darkOrphans.push(d.node);
-        }
-        if (g.darks.length === 0) {
-          for (const l of g.lights) {
-            if (l.kind === 'light-explicit') lightOrphans.push(l.node);
+      // ── Plan each set ─────────────────────────────────────────────────
+      const plans: SetPlan[] = [];
+      const planErrors: string[][] = [];
+
+      if (scan.setWrappersAtRoot.length > 0) {
+        // Multi-set: one plan per wrapper. The UI's Set Name input is ignored.
+        for (const wrapper of scan.setWrappersAtRoot) {
+          const candidates = scan.candidatesByOwner.get(wrapper.node) ?? [];
+          const plan = planSet(wrapper.setName, candidates, wrapper.node);
+          if (plan.errors.length > 0) {
+            planErrors.push([`Set "${wrapper.setName}":`, ...plan.errors.map(l => '  ' + l)]);
+          } else {
+            plans.push(plan);
           }
         }
-      }
-      if (darkOrphans.length > 0) {
-        const lines = ['Dark layers without a light counterpart:'];
-        for (const n of darkOrphans) lines.push(`  ${getNodeFullPath(n)}`);
-        figma.ui.postMessage({ type: 'exportError', message: lines.join('\n') } as CodeToUI);
-        break;
-      }
-      if (lightOrphans.length > 0) {
-        const lines = ['Light layers without a dark counterpart:'];
-        for (const n of lightOrphans) lines.push(`  ${getNodeFullPath(n)}`);
-        figma.ui.postMessage({ type: 'exportError', message: lines.join('\n') } as CodeToUI);
-        break;
+      } else {
+        // Single-set: one plan covering every candidate on the page (loose at
+        // root + descendants of any non-wrapper frames). Use the UI's Set Name.
+        const allCandidates = flattenCandidates(scan);
+        const plan = planSet(msg.setName, allCandidates, figma.currentPage);
+        if (plan.errors.length > 0) planErrors.push(plan.errors);
+        else plans.push(plan);
       }
 
-      // Build jobs from light candidates only. Each light is paired with the
-      // -dark in its group (if any). Dark candidates never become jobs themselves.
-      interface Job {
-        light: SceneNode;
-        dark: SceneNode | null;
-        finalName: string;
-        folder: string[];
-      }
-      const jobs: Job[] = [];
-      for (const g of byCore.values()) {
-        const darkNode = g.darks[0]?.node ?? null; // grouping guarantees ≤ 1 dark per coreName in well-formed input; if more, dupe-check fires below
-        for (const l of g.lights) {
-          jobs.push({
-            light: l.node,
-            dark: darkNode,
-            finalName: sanitizePagePart(l.coreName),
-            folder: getPagePath(l.node),
-          });
-        }
-      }
-
-      // Duplicate detection — by leafCamel (the actual on-disk imageset key,
-      // before the nk_<SetName>_ prefix). This catches: (a) `foo` and `foo-light`
-      // co-existing, (b) any two unrelated candidates collapsing to the same
-      // camelCase, (c) two -dark variants for one core.
-      const byLeafCamel = new Map<string, SceneNode[]>();
-      const keyFor = (coreName: string) => toLowerCamel(sanitizePagePart(coreName));
-      for (const j of jobs) {
-        const k = keyFor(j.finalName);
-        const arr = byLeafCamel.get(k) ?? [];
-        arr.push(j.light);
-        byLeafCamel.set(k, arr);
-      }
-      // Also surface "two -dark candidates for the same core" as a duplicate.
-      for (const g of byCore.values()) {
-        if (g.darks.length > 1) {
-          const k = keyFor(g.darks[0].coreName);
-          const arr = byLeafCamel.get(k) ?? [];
-          for (let i = 1; i < g.darks.length; i++) arr.push(g.darks[i].node);
-          byLeafCamel.set(k, arr);
-        }
-      }
-      const dupeEntries = [...byLeafCamel.entries()].filter(([, nodes]) => nodes.length > 1);
-      if (dupeEntries.length > 0) {
-        const lines = ['Duplicate image names:'];
-        for (const [name, nodes] of dupeEntries) {
-          lines.push(`  "${name}":`);
-          for (const n of nodes) lines.push(`    ${getNodeFullPath(n)}`);
-        }
-        figma.ui.postMessage({ type: 'exportError', message: lines.join('\n') } as CodeToUI);
+      if (planErrors.length > 0) {
+        figma.ui.postMessage({
+          type: 'exportError',
+          message: planErrors.map(arr => arr.join('\n')).join('\n\n'),
+        } as CodeToUI);
         break;
       }
 
+      // ── Build all imagesets across every set (shared concurrency budget) ─
+      // mapWithConcurrency expects a flat work list; record which plan each
+      // job belongs to so we can route the resulting buffer back per-set.
+      interface JobEntry { plan: SetPlan; job: PageBuildJob; }
+      const allJobs: JobEntry[] = [];
+      for (const plan of plans) {
+        for (const job of plan.jobs) allJobs.push({ plan, job });
+      }
+
+      const buffersByPlan = new Map<SetPlan, ImagesetBuffer[]>();
+      for (const plan of plans) buffersByPlan.set(plan, []);
       let failed = 0;
-      const settled = await mapWithConcurrency(jobs, 8, async (job) => {
-        try {
-          return await buildPageImageset(job.light, job.dark, job.finalName, job.folder);
-        } catch (err) {
-          console.error(`Page export failed for "${job.finalName}":`, err);
-          failed++;
-          return null;
-        }
-      });
-      const buffers: ImagesetBuffer[] = settled.filter((b): b is ImagesetBuffer => b !== null);
 
+      await mapWithConcurrency(allJobs, 8, async (entry) => {
+        try {
+          const buf = await buildPageImageset(
+            entry.job.light, entry.job.dark, entry.job.finalName, entry.job.folder, entry.job.density,
+          );
+          buffersByPlan.get(entry.plan)!.push(buf);
+        } catch (err) {
+          console.error(`Page export failed for "${entry.job.finalName}":`, err);
+          failed++;
+        }
+        return null;
+      });
+
+      // ── Per-plan: normalize retina + validate sizes; aggregate errors. ──
       const retinaFixes: string[] = [];
-      for (const b of buffers) retinaFixes.push(...normalizeImagesetRetina(b));
       const sizeErrors: string[] = [];
-      for (const b of buffers) sizeErrors.push(...validateImagesetSizes(b));
+      for (const plan of plans) {
+        const buffers = buffersByPlan.get(plan)!;
+        for (const b of buffers) retinaFixes.push(...normalizeImagesetRetina(b));
+        for (const b of buffers) sizeErrors.push(...validateImagesetSizes(b));
+      }
       if (sizeErrors.length > 0) {
         figma.ui.postMessage({
           type: 'exportError',
@@ -1200,10 +1567,17 @@ figma.ui.onmessage = async (msg: UIToCode) => {
         break;
       }
 
-      emitOutputBundle(buffers, msg.setName);
+      // ── Emit each set as its own bundle in the same ZIP. ─────────────
+      let totalExported = 0;
+      for (const plan of plans) {
+        const buffers = buffersByPlan.get(plan)!;
+        emitOutputBundle(buffers, plan.setName);
+        totalExported += buffers.length;
+      }
+
       // Page mode always produces a ZIP, even when empty (per spec).
       figma.ui.postMessage({
-        type: 'exportDone', exported: buffers.length, failed, mode: 'page',
+        type: 'exportDone', exported: totalExported, failed, mode: 'page',
         retinaFixes,
       } as CodeToUI);
       break;
