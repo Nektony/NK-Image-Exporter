@@ -74,3 +74,9 @@ npm run build   # production build
 ## License
 
 This project is licensed under the [MIT License](LICENSE) — free to use, modify, and distribute.
+
+ ## About Nektony                                                                                                         
+                                                                         
+  Built and maintained by [Nektony](https://nektony.com) — we make focused Mac utilities, including [App Cleaner & Uninstaller](https://nektony.com/mac-app-cleaner), [MacCleaner Pro](https://nektony.com/mac-cleaner-pro), and [Disk Space Analyzer](https://nektony.com/disk-expert).                                                                  
+                                                                         
+  For other open-source work — methodology docs, CLI scripts — see our [GitHub organisation](https://github.com/Nektony).
