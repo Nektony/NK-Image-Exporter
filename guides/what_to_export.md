@@ -1,63 +1,63 @@
-# Что выносим в плагин, а что рисуем кодом
+# What goes through the plugin and what we draw in code
 
-Договорённость между программистами и дизайнерами о том, какие ассеты идут через `FigmaImageExporter` (попадают в `.xcassets` и `FigmaImageAssets`-енум), а какие остаются на стороне кода или системы.
+An agreement between developers and designers on which assets travel through `FigmaImageExporter` (and end up in `.xcassets` and the `FigmaImageAssets` enum), and which stay on the code or system side.
 
-Цель — не плодить PNG'и для того, что и без них прекрасно живёт в коде, и не размывать границу между «иллюстрацией» и «UI-примитивом».
-
----
-
-## Не выносим в плагин
-
-Эти штуки **не должны** попадать в Figma-файл с префиксом `img_exp/` и не должны помечаться плагином. Если такое прилетело — возвращаем дизайнеру или удаляем.
-
-### 1. Системные ресурсы
-
-Всё, что macOS уже умеет отдать через свои API:
-
-- иконки приложений,
-- превью файлов,
-- иконки папок,
-- любые ассеты, которые видно в Finder.
-
-Берём их через `NSWorkspace`, `NSImage(named:)` с системными именами, `QLThumbnail` и т.п.
-
-### 2. Тексты и подписи
-
-Любая надпись — это системный `NSTextField` / `NSAttributedString` со шрифтом и цветом из дизайн-токенов. В PNG не превращаем никогда, даже если в макете это «лейбл с красивой типографикой».
-
-### 3. Простые фигуры со сплошной заливкой
-
-Кружок, прямоугольник, скруглённый прямоугольник, простой блок одного цвета — рисуются кодом (`NSBezierPath`, `CALayer`, SwiftUI shapes). Признак «простой» здесь:
-
-- одна заливка, один цвет (или один цвет из FigmaColor-токенов),
-- без градиента,
-- без тени,
-- без обводки.
-
-Заливка одного цвета — не повод для PNG.
-
-### 4. Элементы с обводкой
-
-Кнопки, зоны «заливка + рамка», заданные через стиль. Не важно, сплошные цвета или градиентные — пока это укладывается в схему «фигура + обводка», программист рисует сам.
-
-### 5. Большие фоны / бэкграунды
-
-Если ассету нужен только `1x` или только `2x` (без retina-пары) — теперь это поддерживает сам плагин: пометь слой как `img_exp/1x/<name>` (только `@1x`) или `img_exp/2x/<name>` (только `@2x`). Подробности — в `designer_manual.md`, раздел про маркер плотности.
+The goal is twofold: don't multiply PNGs for things that live perfectly well in code, and don't blur the line between "illustration" and "UI primitive".
 
 ---
 
-## Выносим в плагин
+## Don't put through the plugin
 
-Через `img_exp/...` (или ручную пометку в tagged-режиме) идёт всё, что **дешевле прислать картинкой**, чем переписать кодом.
+These should **not** appear in the Figma file with the `img_exp/` prefix and should not be marked by the plugin. If something like this lands in your input — send it back to the designer or delete it.
 
-### 1. Произвольные фигуры сложной формы
+### 1. System resources
 
-То, что не описывается одной-двумя кривыми Безье. Если воспроизведение в коде превращается в портянку из `move(to:)`/`curve(to:)` на сотню строк — это PNG.
+Anything macOS can already hand you via its own APIs:
 
-### 2. Многоцветные сложные иллюстрации
+- application icons,
+- file previews,
+- folder icons,
+- any asset that's visible in Finder.
 
-Иллюстрации, где одновременно много цветов, форм, слоёв и эффектов. Превью устройств, маскоты, спот-иллюстрации в пустых состояниях, сложные баджи и т.п.
+Pull them via `NSWorkspace`, `NSImage(named:)` with system names, `QLThumbnail`, etc.
 
-### 3. Сложные градиенты
+### 2. Text and labels
 
-Многоточечные / конические / mesh-градиенты и любые другие, которые дорого или невозможно собрать через `NSGradient` / `CAGradientLayer` без потери качества. Простой линейный двухцветный градиент — это не сюда, его рисуем кодом.
+Any caption is a system `NSTextField` / `NSAttributedString` with a font and color from the design tokens. Never turn it into a PNG, even if the mockup shows it as "a label with fancy typography".
+
+### 3. Simple shapes with a flat fill
+
+A circle, rectangle, rounded rectangle, plain single-color block — all drawn in code (`NSBezierPath`, `CALayer`, SwiftUI shapes). The "simple" criterion here:
+
+- one fill, one color (or a single color from the FigmaColor tokens),
+- no gradient,
+- no shadow,
+- no stroke.
+
+A flat color fill is not a reason for a PNG.
+
+### 4. Elements with a stroke
+
+Buttons, "fill + border" regions defined via a style. It doesn't matter whether the colors are flat or gradient — as long as it fits the "shape + stroke" pattern, the developer draws it directly.
+
+### 5. Large backgrounds
+
+If an asset only needs `1x` or only `2x` (without a retina pair) — the plugin now supports this directly: mark the layer as `img_exp/1x/<name>` (only `@1x`) or `img_exp/2x/<name>` (only `@2x`). Details are in `designer_manual.md`, in the density-marker section.
+
+---
+
+## Do put through the plugin
+
+Through `img_exp/...` (or a manual tag in tagged mode) goes everything that is **cheaper to ship as a picture** than to rewrite in code.
+
+### 1. Arbitrary complex-shape figures
+
+Things that aren't described by one or two Bézier curves. If reproducing it in code turns into a hundred lines of `move(to:)` / `curve(to:)` — that's a PNG.
+
+### 2. Multi-color complex illustrations
+
+Illustrations that simultaneously combine many colors, shapes, layers, and effects. Device previews, mascots, spot illustrations for empty states, complex badges, and so on.
+
+### 3. Complex gradients
+
+Multi-stop / conical / mesh gradients and any others that are expensive or impossible to assemble via `NSGradient` / `CAGradientLayer` without quality loss. A simple linear two-color gradient does not belong here — draw it in code.

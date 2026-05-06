@@ -1,21 +1,21 @@
-# FigmaImageExporter — гайд для программиста
+# FigmaImageExporter — developer guide
 
-Этот документ — для **macOS-разработчика, который подключает выгрузку плагина** в свой Xcode-проект и использует сгенерированные ассеты в коде. Для инструкций дизайнеру см. [`designer_manual.md`](designer_manual.md). Гайд по самому плагину (как его собирать и менять) — отдельный документ.
+This document is for the **macOS developer who integrates the plugin's output** into their Xcode project and consumes the generated assets in code. For instructions to the designer, see [`designer_manual.md`](designer_manual.md). The guide to the plugin itself (how to build and modify it) is a separate document.
 
-> **Платформа: только macOS.** Сгенерированный `Contents.json` использует `idiom: "mac"`, сгенерированный Swift возвращает `NSImage` (AppKit). Для iOS / iPadOS / `UIImage` плагин в текущем виде **не годится** — потребуется отдельная конвенция и другой `idiom`.
+> **Platform: macOS only.** The generated `Contents.json` uses `idiom: "mac"`, the generated Swift returns `NSImage` (AppKit). The plugin in its current form is **not suitable** for iOS / iPadOS / `UIImage` — that would need a separate convention and a different `idiom`.
 
 ---
 
-## 1. Что в ZIP
+## 1. What's in the ZIP
 
-После экспорта дизайнер отдаёт `images.zip`. Внутри — **одна или несколько** обёрточных папок (по одной на каждый Set):
+After an export, the designer hands you `images.zip`. Inside there are **one or more** wrapper folders (one per Set):
 
 ```
 images.zip
 ├── <SetName1>FigmaImageAssets/
-│   ├── <SetName1>FigmaImageAssets.swift              ← сгенерированный enum
-│   ├── <SetName1>FigmaImageAssets_images_sizes.json  ← манифест размеров (для NKExtraCompilationTool)
-│   └── <SetName1>FigmaImageAssets.xcassets/          ← обычный Asset Catalog
+│   ├── <SetName1>FigmaImageAssets.swift              ← generated enum
+│   ├── <SetName1>FigmaImageAssets_images_sizes.json  ← sizes manifest (for NKExtraCompilationTool)
+│   └── <SetName1>FigmaImageAssets.xcassets/          ← regular Asset Catalog
 │       ├── Contents.json
 │       ├── Preview/
 │       │   ├── Contents.json
@@ -23,60 +23,60 @@ images.zip
 │       │   ├── nk_<setname1>_macbookLock.imageset/
 │       │   └── …
 │       └── …
-└── <SetName2>FigmaImageAssets/                       ← только если дизайнер делал multi-set экспорт
+└── <SetName2>FigmaImageAssets/                       ← only present if the designer did a multi-set export
     └── …
 ```
 
-`<SetName>` — имя набора:
-- В обычном (single-set) экспорте — то, что дизайнер ввёл в поле **Set Name** в плагине.
-- В multi-set экспорте (когда на странице несколько `img_exp/SetName:…`-фреймов) — каждое имя берётся прямо из соответствующего фрейма. В одном `images.zip` лежит несколько обёрток сразу.
+`<SetName>` is the bundle name:
+- In a regular (single-set) export — what the designer typed into the **Set Name** field in the plugin.
+- In a multi-set export (when the page contains several `img_exp/SetName:…` frames) — each name is taken directly from the corresponding frame. A single `images.zip` then carries multiple wrappers at once.
 
-В обоих случаях с командой согласовывается список `<SetName>` (например, `Common`, `App`, `Sidebar`) — чтобы пути в Xcode-проекте были предсказуемыми.
+In both cases, the list of `<SetName>` values is agreed on with the team (e.g. `Common`, `App`, `Sidebar`) — so the paths in the Xcode project are predictable.
 
-`nk_<setname>_` — namespace на каждом ассете, защищает от коллизий с системными или сторонними бандлами. Так что если у тебя в проекте уже есть `icon_back` от стороннего pod’а — наш `nk_common_iconBack` с ним не пересечётся.
+`nk_<setname>_` is a per-asset namespace that protects against collisions with system bundles or third-party ones. So if your project already has an `icon_back` from some pod, our `nk_common_iconBack` won't clash with it.
 
-> **1x-only / 2x-only ассеты.** Дизайнер может пометить отдельный ассет маркером `img_exp/1x/foo` (только `@1x`) или `img_exp/2x/foo` (только `@2x`) — у такого imageset'а в `Contents.json` пропущенная плотность останется без `filename`, на диске соответствующий PNG не лежит. В Swift-коде разницы нет: `imageName`, `case`, raw value те же. Размер в `_images_sizes.json` всегда в **поинтах** — для 2x-only ассета значение это размер 2x PNG, поделённый на 2.
+> **1x-only / 2x-only assets.** The designer can mark an individual asset with `img_exp/1x/foo` (only `@1x`) or `img_exp/2x/foo` (only `@2x`) — for such an imageset the missing-density slot in `Contents.json` carries no `filename`, and the corresponding PNG is not on disk. There is no difference in Swift code: `imageName`, the `case`, and the raw value are the same. The size in `_images_sizes.json` is always in **points** — for a 2x-only asset the value is the 2x PNG dimensions divided by two.
 
 ---
 
-## 2. Куда положить файлы в Xcode-проекте
+## 2. Where to put the files in the Xcode project
 
-### 2.1. Где разместить папку
+### 2.1. Where to place the folder
 
-Папку `<SetName>FigmaImageAssets/` положи в любое место проекта — например, `App/Resources/Figma/`. Структура:
+Put `<SetName>FigmaImageAssets/` anywhere in the project — for example, `App/Resources/Figma/`. Layout:
 
 ```
 App/
 └── Resources/
     └── Figma/
-        ├── CommonFigmaImageAssets_cached_images_sizes.json   ← создастся на первом билде, см. §4
-        └── CommonFigmaImageAssets/                           ← из ZIP, целиком
+        ├── CommonFigmaImageAssets_cached_images_sizes.json   ← created on the first build, see §4
+        └── CommonFigmaImageAssets/                           ← from the ZIP, in full
             ├── CommonFigmaImageAssets.swift
             ├── CommonFigmaImageAssets_images_sizes.json
             └── CommonFigmaImageAssets.xcassets/
                 └── …
 ```
 
-### 2.2. Что добавить в Xcode target
+### 2.2. What to add to the Xcode target
 
-| Файл | В target? |
-|------|-----------|
-| `<SetName>FigmaImageAssets.swift` | **Да** — добавь в свой target, как обычный Swift-файл. |
-| `<SetName>FigmaImageAssets.xcassets` | **Да** — Xcode подхватит как Asset Catalog. |
-| `<SetName>FigmaImageAssets_images_sizes.json` | **Нет** — это служебный файл для проверки на сборке (NKExtraCompilationTool читает его сам). Просто оставь рядом в файловой системе. |
-| `<SetName>FigmaImageAssets_cached_images_sizes.json` | **Нет** — тоже служебный, но **в git коммитить нужно** (см. §4). |
+| File | In target? |
+|------|------------|
+| `<SetName>FigmaImageAssets.swift` | **Yes** — add to your target as a regular Swift file. |
+| `<SetName>FigmaImageAssets.xcassets` | **Yes** — Xcode picks it up as an Asset Catalog. |
+| `<SetName>FigmaImageAssets_images_sizes.json` | **No** — this is a service file used by the build-time check (NKExtraCompilationTool reads it itself). Just leave it in the file system. |
+| `<SetName>FigmaImageAssets_cached_images_sizes.json` | **No** — also a service file, but **must be committed to git** (see §4). |
 
-### 2.3. Структура папки — не трогать руками
+### 2.3. Don't touch the folder layout by hand
 
-Содержимое `<SetName>FigmaImageAssets/` целиком регенерируется при каждой выгрузке от дизайнера. Любые твои правки внутри (переименовал ассет, поправил `Contents.json`, отредактировал `.swift`) **исчезнут** при следующем обновлении.
+The contents of `<SetName>FigmaImageAssets/` are regenerated wholesale on every export from the designer. Any edits inside (renamed an asset, tweaked `Contents.json`, edited the `.swift`) **will disappear** on the next update.
 
-Если нужно что-то поменять — это запрос к дизайнеру (поправить в Figma и переэкспортировать) или к разработчику плагина (поменять кодген).
+If something needs to change — that's a request to the designer (fix it in Figma and re-export) or to the plugin developer (change the codegen).
 
 ---
 
-## 3. Использование в коде
+## 3. Using the assets in code
 
-### 3.1. Базовый случай
+### 3.1. The basic case
 
 ```swift
 import AppKit
@@ -84,53 +84,53 @@ import AppKit
 imageView.image = CommonFigmaImageAssets.preview_macbookLock.image
 ```
 
-Всё. Никаких `NSImage(named: "icon_back")` со строками — есть автокомплит и проверка компилятором.
+That's it. No `NSImage(named: "icon_back")` with stringly-typed names — you get autocomplete and compiler verification.
 
-### 3.2. Как читается имя case
+### 3.2. How the case name is read
 
-`<lowerFolder1>_<lowerFolder2>_..._<camelCaseLeaf>` — папки в Figma становятся префиксами, имя слоя становится последним сегментом в lowerCamelCase:
+`<lowerFolder1>_<lowerFolder2>_..._<camelCaseLeaf>` — folders in Figma become prefixes, the layer name becomes the last segment in lowerCamelCase:
 
-| В Figma                              | В Swift                          |
-|--------------------------------------|----------------------------------|
-| `Preview/img_exp/macbook-lock`       | `preview_macbookLock`            |
-| `Mobile/Toolbar/img_exp/icon-back`   | `mobile_toolbar_iconBack`        |
-| `img_exp/ai-state` (без папки)       | `aiState`                        |
+| In Figma                              | In Swift                          |
+|---------------------------------------|-----------------------------------|
+| `Preview/img_exp/macbook-lock`        | `preview_macbookLock`             |
+| `Mobile/Toolbar/img_exp/icon-back`    | `mobile_toolbar_iconBack`         |
+| `img_exp/ai-state` (no folder)        | `aiState`                         |
 
-### 3.3. Все ассеты сразу — `CaseIterable`
+### 3.3. All assets at once — `CaseIterable`
 
 ```swift
-// DEBUG: assert-проход по всем ассетам — ловит «потерявшийся» ассет рано.
+// DEBUG: assert-walk over every asset — catches a "lost" asset early.
 #if DEBUG
 CommonFigmaImageAssets.debugExistanceCheck()
 #endif
 
-// Можно итерировать
+// Iteration is fine
 for asset in CommonFigmaImageAssets.allCases {
     print(asset.imageName, asset.image?.size as Any)
 }
 ```
 
-`debugExistanceCheck()` имеет смысл звать в `applicationDidFinishLaunching(_:)` под `#if DEBUG` — упадёт ассертом, если какой-то enum case не находит свой PNG в бандле.
+It makes sense to call `debugExistanceCheck()` from `applicationDidFinishLaunching(_:)` under `#if DEBUG` — it will trip an assert if any enum case can't find its PNG in the bundle.
 
-### 3.4. Что внутри `imageName` и почему оно такое
+### 3.4. What's inside `imageName` and why it looks that way
 
 ```swift
 var imageName: String { "nk_common_\(rawValue)" }
 ```
 
-`imageName` — это уже готовая строка для `NSImage(named:)`. Префикс `nk_common_` собирается автоматически. Тебе как пользователю он не нужен — работай с `case`’ами.
+`imageName` is a ready-to-use string for `NSImage(named:)`. The `nk_common_` prefix is assembled automatically. As a consumer you don't need it directly — work with the `case`s.
 
-`rawValue` — это camelCase-имя без префиксов и без иерархии (например, `"macbookLock"`). Совпадает с тем, что дизайнер видит в имени слоя после нормализации. Используй его, если нужно сравнить с чем-то внешним.
+`rawValue` is the camelCase name without the prefix and without the hierarchy (e.g. `"macbookLock"`). It matches what the designer sees in the layer name after normalization. Use it if you need to compare against something external.
 
-### 3.5. Удаление ассета на стороне дизайнера
+### 3.5. Asset deletion on the designer's side
 
-Если дизайнер удалил иконку из Figma → в новой выгрузке `case` пропадёт → компилятор покажет, где он ещё используется. Это **фича**, не баг — заметишь сразу, не унесёшь сломанную ссылку в прод.
+If the designer removes an icon from Figma → in the next export the `case` disappears → the compiler will show you where it's still being used. That's a **feature**, not a bug — you spot the issue immediately and don't carry a dead reference into production.
 
 ---
 
-## 4. Build-time проверка размеров (NKExtraCompilationTool)
+## 4. Build-time size check (NKExtraCompilationTool)
 
-Плагин кладёт в каждый бандл файл `<SetName>FigmaImageAssets_images_sizes.json`:
+The plugin places a `<SetName>FigmaImageAssets_images_sizes.json` file inside each bundle:
 
 ```json
 {
@@ -140,31 +140,31 @@ var imageName: String { "nk_common_\(rawValue)" }
 }
 ```
 
-Это «текущие размеры всех ассетов». Ключи — Swift case-имена, **полностью приведённые к нижнему регистру** (так делает плагин при генерации манифеста). То есть Swift case `preview_macbookLock` в JSON-манифесте → ключ `preview_macbooklock`. Соседний пакет `NKExtraCompilationTool` на каждой сборке Xcode-проекта сверяет этот файл с замороженным кэшем `<SetName>FigmaImageAssets_cached_images_sizes.json`, лежащим **на уровень выше** (вне регенерируемой папки).
+This is "the current sizes of every asset". The keys are Swift case names, **fully lowercased** (that's what the plugin does when generating the manifest). So the Swift case `preview_macbookLock` becomes the key `preview_macbooklock` in the JSON manifest. The companion package `NKExtraCompilationTool` runs on every Xcode build of the project and compares this file against a frozen cache `<SetName>FigmaImageAssets_cached_images_sizes.json` that lives **one level above** (outside the regenerated folder).
 
-### 4.1. Подключение в Build Phases
+### 4.1. Hooking it up in Build Phases
 
-В **Build Phases** твоего таргета добавь шаг **Run Script** до **Compile Sources**:
+In your target's **Build Phases**, add a **Run Script** step before **Compile Sources**:
 
 ```sh
 "$SRCROOT/path/to/NKExtraCompilationTool/Sources/NKExtraCompilationTool/main.sh" \
     "$DERIVED_FILE_DIR" "$SRCROOT" "$SRCROOT"
 ```
 
-`main.sh` сам найдёт все `*_images_sizes.json` в проекте и вызовет проверку. Никаких ручных конфигов на каждый набор не нужно — оно само.
+`main.sh` finds every `*_images_sizes.json` in the project itself and runs the check. No per-bundle config required — it's automatic.
 
-### 4.2. Что делает проверка
+### 4.2. What the check does
 
-- **Кэша рядом нет** → создаёт его из текущих размеров. Молча.
-- **Появился новый ассет** → добавляет запись в кэш. Молча.
-- **Удалён ассет** → убирает запись из кэша. Молча.
-- **Тот же ассет, размер изменился** → **ошибка сборки прямо в Xcode** с указанием имени, старого и нового размера, и пути к кэшу.
+- **No cache next to it** → creates one from the current sizes. Silently.
+- **A new asset appeared** → adds an entry to the cache. Silently.
+- **An asset was removed** → drops the entry from the cache. Silently.
+- **Same asset, different size** → **build error directly in Xcode** with the asset name, the cached size, the current size, and the path to the cache.
 
-Все конфликты по всем наборам выводятся **за один прогон**, не по одной ошибке за билд.
+All conflicts across all bundles are reported **in a single pass**, not one error per build.
 
-### 4.3. Когда вылетела ошибка про размер
+### 4.3. When you hit the size error
 
-Текст ошибки выглядит так:
+The error text looks like this:
 
 ```
 …/CommonFigmaImageAssets_images_sizes.json: error: image size changed for 'preview_domians':
@@ -172,71 +172,71 @@ cached 30x30, current 32x30. If this change is intentional, delete or edit
 …/CommonFigmaImageAssets_cached_images_sizes.json.
 ```
 
-Два варианта:
+Two scenarios:
 
-- **Изменение случайное** (дизайнер случайно подвинул слой на пару пикселей) → обратись к дизайнеру, пусть привяжет к целым координатам и переэкспортирует. После следующей выгрузки билд пройдёт без правок с твоей стороны.
-- **Изменение намеренное** (новый размер UI-элемента, всё под него уже подгоняем) → открой `CommonFigmaImageAssets_cached_images_sizes.json` и **удали запись** про этот ассет (или поправь значения вручную). Следующий билд впишет актуальный размер и больше не будет ругаться.
+- **The change was accidental** (the designer nudged the layer by a couple of pixels by mistake) → ask the designer to snap to integer coordinates and re-export. After the next export the build passes without any change on your side.
+- **The change was intentional** (a UI element has a new size and everything is being adjusted to it) → open `CommonFigmaImageAssets_cached_images_sizes.json` and **delete the entry** for that asset (or edit the values manually). The next build will record the new size and stop complaining.
 
-### 4.4. Кэш-файл — версионируется в git
+### 4.4. The cache file is versioned in git
 
-`<SetName>FigmaImageAssets_cached_images_sizes.json` коммитится в git как обычный код. Изменения в нём проходят ревью — это гарантирует, что «разморозка размера» не делается молча.
+`<SetName>FigmaImageAssets_cached_images_sizes.json` is committed to git like any other code. Changes to it go through code review — that ensures size "unfreezing" doesn't happen silently.
 
-> Если папка `<SetName>FigmaImageAssets/` лежит в `Resources/Figma/`, то кэш — в `Resources/Figma/CommonFigmaImageAssets_cached_images_sizes.json`. На один уровень выше регенерируемой папки.
+> If `<SetName>FigmaImageAssets/` lives in `Resources/Figma/`, the cache is at `Resources/Figma/CommonFigmaImageAssets_cached_images_sizes.json`. One level above the regenerated folder.
 
 ---
 
-## 5. Несколько наборов в одном проекте
+## 5. Multiple bundles in one project
 
-Можно держать параллельно сколько угодно наборов. Они могут приходить как из отдельных экспортов (один Set на ZIP), так и из одного multi-set экспорта (несколько обёрток в одном ZIP — раскладываешь их по тем же путям, что и в случае отдельных экспортов).
+You can keep arbitrarily many bundles in parallel. They can come either from separate exports (one Set per ZIP) or from a single multi-set export (several wrappers in one ZIP — you place them along the same paths as you would for separate exports).
 
 ```
 App/Resources/Figma/
 ├── CommonFigmaImageAssets_cached_images_sizes.json
-├── CommonFigmaImageAssets/                          ← общие иконки
+├── CommonFigmaImageAssets/                          ← shared icons
 │   └── …
 ├── SidebarFigmaImageAssets_cached_images_sizes.json
-└── SidebarFigmaImageAssets/                         ← специфичные для сайдбара
+└── SidebarFigmaImageAssets/                         ← sidebar-specific
     └── …
 ```
 
-Каждый — со своим namespace `nk_<setname>_`, своим enum, своей `.xcassets`. Они **не пересекаются** и обновляются независимо. В коде:
+Each one has its own `nk_<setname>_` namespace, its own enum, its own `.xcassets`. They **don't overlap** and update independently. In code:
 
 ```swift
 imageView.image = CommonFigmaImageAssets.preview_macbookLock.image
 sidebarIcon.image = SidebarFigmaImageAssets.toolbar_settingsIcon.image
 ```
 
-NKExtraCompilationTool сам найдёт все наборы через `find` — не нужно его никак конфигурировать под каждый.
+NKExtraCompilationTool finds every bundle on its own via `find` — no per-bundle configuration needed.
 
 ---
 
-## 6. Workflow обновления
+## 6. Update workflow
 
-Когда дизайнер прислал свежий ZIP:
+When the designer ships a fresh ZIP:
 
-1. **Удали** старую папку `<SetName>FigmaImageAssets/` целиком.
-2. **Распакуй** новый ZIP, положи папку на то же место.
-3. **Не трогай** `<SetName>FigmaImageAssets_cached_images_sizes.json` (он на уровень выше) — он сам обновится на следующем билде, если нет конфликтов.
-4. **Собери проект** — если NKExtraCompilationTool не ругнулся, всё ОК; новые ассеты доступны через автокомплит.
-5. **Закоммить** — и ZIP-папку, и (если кэш изменился) обновлённый `_cached_images_sizes.json`.
+1. **Delete** the old `<SetName>FigmaImageAssets/` folder in full.
+2. **Unpack** the new ZIP and put the folder in the same place.
+3. **Don't touch** `<SetName>FigmaImageAssets_cached_images_sizes.json` (it's one level up) — it will update itself on the next build if there are no conflicts.
+4. **Build the project** — if NKExtraCompilationTool didn't complain, you're good; new assets are available through autocomplete.
+5. **Commit** — both the ZIP folder and (if the cache changed) the updated `_cached_images_sizes.json`.
 
-Если что-то добавилось / удалилось — компилятор сам покажет, что не сходится в коде.
-
----
-
-## 7. Чего лучше не делать
-
-- **Не редактировать руками** содержимое `<SetName>FigmaImageAssets/`. Любые правки исчезнут при следующей выгрузке от дизайнера.
-- **Не убирать namespace-префикс `nk_<setname>_`** с ассетов в `.xcassets` — `imageName` в Swift собирает его автоматически и ожидает увидеть на диске. Уберёшь — всё сломается в рантайме.
-- **Не включать `Provides Namespace`** на папках внутри `.xcassets` — текущий контракт: папки чисто организационные, `NSImage(named:)` находит ассет по плоскому имени с префиксом. Включишь — Xcode начнёт требовать полный путь, и `imageName` перестанет резолвиться.
-- **Не делать stringly-typed `NSImage(named: "nk_common_iconBack")`** — теряется весь смысл генерации. Используй `case`’ы.
-- **Не игнорировать ошибку про размер от NKExtraCompilationTool.** Она всегда означает одно из двух: дизайнер случайно сломал размер, или новый размер не согласован. Молча разморозить кэш — техдолг, который вылезет потом.
+If anything was added or removed, the compiler will show you where things don't line up in code.
 
 ---
 
-## 8. Куда смотреть дальше
+## 7. What's better not to do
 
-- **Полная архитектурная спецификация** (как работает плагин и его выгрузка) — [`CLAUDE.md`](CLAUDE.md)
-- **Инструкция дизайнеру** (что и как именовать в Figma) — [`designer_manual.md`](designer_manual.md)
-- **Договорённость о том, что вообще выносится в плагин** (а что рисуется кодом или берётся из системы) — [`what_to_export.md`](what_to_export.md). Полезно перечитать с дизайнером перед тем, как закатывать новые ассеты в Figma-файл.
-- **NKExtraCompilationTool** (build-time проверки, не только размеров) — `/Users/zevs/repo/nektony/packages/NKExtraCompilationTool/`
+- **Don't hand-edit** the contents of `<SetName>FigmaImageAssets/`. Any edits will disappear on the next export from the designer.
+- **Don't strip the namespace prefix `nk_<setname>_`** from assets in `.xcassets` — `imageName` in Swift assembles it automatically and expects to find it on disk. Strip it and everything breaks at runtime.
+- **Don't enable `Provides Namespace`** on folders inside `.xcassets` — the current contract is that folders are purely organisational, and `NSImage(named:)` finds an asset by its flat name with the prefix. Enable it and Xcode will start requiring the full path, and `imageName` will stop resolving.
+- **Don't do stringly-typed `NSImage(named: "nk_common_iconBack")`** — that defeats the entire point of the codegen. Use the `case`s.
+- **Don't ignore the size error from NKExtraCompilationTool.** It always means one of two things: the designer accidentally broke the size, or the new size hasn't been agreed on. Silently un-freezing the cache is tech debt that will surface later.
+
+---
+
+## 8. Where to look next
+
+- **Full architectural specification** (how the plugin works and what it produces) — [`CLAUDE.md`](CLAUDE.md)
+- **Designer manual** (what to name and how, in Figma) — [`designer_manual.md`](designer_manual.md)
+- **Agreement on what goes through the plugin in the first place** (vs. drawn in code or fetched from system APIs) — [`what_to_export.md`](what_to_export.md). Worth re-reading with the designer before bringing new assets into the Figma file.
+- **NKExtraCompilationTool** (build-time checks, not just for sizes) — `/Users/zevs/repo/nektony/packages/NKExtraCompilationTool/`
