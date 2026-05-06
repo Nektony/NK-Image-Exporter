@@ -5,7 +5,11 @@
 
 # Node artifact files
 node_modules/
-dist/
+
+# `dist/` IS committed — `manifest.json` points Figma at `dist/code.js` and
+# `dist/ui.html`, and webpack bundles every dependency into them. Committing
+# the built artefacts means the repo can be cloned and loaded into Figma
+# without running `npm install` / `npm run build` first.
 
 # Compiled Java class files
 *.class
@@ -21,7 +25,6 @@ dist/
 
 # Maven
 target/
-dist/
 
 # JetBrains IDE
 .idea/

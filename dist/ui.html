@@ -1,0 +1,295 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"/><style>*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 12px;
+      color: #1e1e1e;
+      background: #fff;
+      overflow: hidden;
+      height: 100vh;
+    }
+
+    .app {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+    }
+
+    /* ── Sections ─────────────────────────────────────────────────── */
+
+    .section {
+      padding: 10px 12px;
+      border-bottom: 1px solid #e6e6e6;
+      flex-shrink: 0;
+    }
+
+    .section-label {
+      font-size: 10px;
+      font-weight: 600;
+      color: #999;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 8px;
+    }
+
+    /* ── Hints ────────────────────────────────────────────────────── */
+
+    .hint {
+      font-size: 11px;
+      color: #aaa;
+      text-align: center;
+      padding: 6px 0;
+    }
+
+    /* ── Selection panel ──────────────────────────────────────────── */
+
+    .layer-row {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      margin-bottom: 7px;
+    }
+
+    .layer-icon {
+      flex-shrink: 0;
+      color: #aaa;
+    }
+
+    .layer-name {
+      font-size: 11px;
+      color: #555;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .input-row {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+    }
+
+    input[type="text"] {
+      flex: 1;
+      height: 28px;
+      border: 1px solid #ddd;
+      border-radius: 5px;
+      padding: 0 8px;
+      font-size: 12px;
+      font-family: inherit;
+      color: #1e1e1e;
+      background: #fafafa;
+      outline: none;
+      transition: border-color 0.12s;
+      min-width: 0;
+    }
+
+    input[type="text"]:focus {
+      border-color: #0d99ff;
+      background: #fff;
+    }
+
+    .btn {
+      height: 28px;
+      border: none;
+      border-radius: 5px;
+      font-size: 11px;
+      font-family: inherit;
+      font-weight: 600;
+      cursor: pointer;
+      padding: 0 10px;
+      white-space: nowrap;
+      transition: background 0.12s, opacity 0.12s;
+    }
+
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    .btn-primary { background: #0d99ff; color: #fff; }
+    .btn-primary:hover:not(:disabled) { background: #0880d9; }
+
+    .btn-ghost { background: #f0f0f0; color: #555; }
+    .btn-ghost:hover:not(:disabled) { background: #e4e4e4; }
+
+    .btn-unmark { background: #fff0f0; color: #d93025; border: 1px solid #fbd0cc; }
+    .btn-unmark:hover:not(:disabled) { background: #fde3e0; }
+
+    .error-msg {
+      font-size: 11px;
+      color: #d93025;
+      margin-top: 5px;
+      min-height: 14px;
+    }
+
+    /* ── List section ─────────────────────────────────────────────── */
+
+    .list-section {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      min-height: 0;
+    }
+
+    .list-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border-bottom: 1px solid #e6e6e6;
+      flex-shrink: 0;
+    }
+
+    .list-title {
+      font-size: 10px;
+      font-weight: 600;
+      color: #999;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      white-space: nowrap;
+    }
+
+    .search-input {
+      flex: 1;
+      height: 24px !important;
+      font-size: 11px !important;
+      background: #f0f0f0 !important;
+      border-color: transparent !important;
+    }
+
+    .search-input:focus {
+      background: #fff !important;
+      border-color: #0d99ff !important;
+    }
+
+    .image-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 3px 0;
+    }
+
+    /* ── List items ───────────────────────────────────────────────── */
+
+    .list-item {
+      display: flex;
+      align-items: center;
+      padding: 4px 6px 4px 12px;
+      gap: 4px;
+      min-height: 30px;
+    }
+
+    .list-item:hover { background: #f5f5f5; }
+
+    .item-name-wrap { flex: 1; min-width: 0; }
+
+    .item-name {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      padding: 3px 5px;
+      border-radius: 3px;
+      cursor: text;
+      border: 1px solid transparent;
+    }
+
+    .item-name:hover { background: #eaeaea; }
+
+    .item-rename-input {
+      width: 100%;
+      height: 24px !important;
+      font-size: 11px !important;
+      padding: 0 5px !important;
+    }
+
+    .item-actions { display: flex; gap: 1px; flex-shrink: 0; }
+
+    .icon-btn {
+      width: 26px;
+      height: 26px;
+      border: none;
+      background: transparent;
+      border-radius: 4px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #aaa;
+      transition: background 0.1s, color 0.1s;
+      flex-shrink: 0;
+    }
+
+    .icon-btn:hover { background: #e6e6e6; color: #444; }
+    .icon-btn.danger:hover { background: #fde8e8; color: #d93025; }
+
+    /* ── Footer ───────────────────────────────────────────────────── */
+
+    .footer {
+      padding: 10px 12px;
+      border-top: 1px solid #e6e6e6;
+      flex-shrink: 0;
+    }
+
+    .btn-export {
+      width: 100%;
+      height: 32px;
+      background: #1e1e1e;
+      color: #fff;
+      font-size: 12px;
+    }
+
+    .btn-export:hover:not(:disabled) { background: #3a3a3a; }
+
+    .btn-export + .btn-export { margin-top: 6px; }
+
+    .setname-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 4px;
+    }
+    .setname-label {
+      font-size: 10px;
+      font-weight: 600;
+      color: #999;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      white-space: nowrap;
+    }
+    .setname-input {
+      flex: 1;
+      height: 26px !important;
+      font-size: 11px !important;
+    }
+    .setname-input.invalid {
+      border-color: #d93025 !important;
+      background: #fff !important;
+    }
+    .setname-error {
+      font-size: 10.5px;
+      color: #d93025;
+      margin: 2px 0 6px 0;
+    }
+
+    .export-status {
+      font-size: 11px;
+      text-align: center;
+      margin-top: 6px;
+      min-height: 14px;
+    }
+
+    .export-status.success { color: #16a34a; }
+    .export-status.warning { color: #ea580c; }
+    .export-status.error {
+      color: #d93025;
+      text-align: left;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 10.5px;
+      line-height: 1.4;
+      max-height: 180px;
+      overflow-y: auto;
+    }
+
+    /* ── Utilities ────────────────────────────────────────────────── */
+
+    .hidden { display: none !important; }</style></head><body><div class="app"><div class="section" id="selection-section"><div class="section-label">Selected layer</div><div id="no-selection" class="hint">Select a layer to mark it as an image</div><div id="multi-selection" class="hint hidden">Select a single layer to mark it</div><div id="selection-content" class="hidden"><div class="layer-row"><svg class="layer-icon" width="12" height="12" viewBox="0 0 12 12" fill="none"><rect x="1" y="1" width="10" height="10" rx="1.5" stroke="#aaa" stroke-width="1.2"/></svg> <span class="layer-name" id="layer-name"></span></div><div class="input-row"><input id="image-name-input" placeholder="Image name…"/> <button class="btn btn-primary" id="mark-btn">Mark as Image</button> <button class="btn btn-unmark hidden" id="unmark-btn">Unmark</button></div><div class="error-msg hidden" id="selection-error"></div></div></div><div class="list-section"><div class="list-header"><span class="list-title" id="list-title">Images</span> <input class="search-input" id="search-input" placeholder="Search…"/></div><div class="image-list" id="image-list"></div><div class="hint hidden" id="empty-list">No images marked yet</div></div><div class="footer"><div class="setname-row"><label class="setname-label" for="setname-input">Set name</label> <input id="setname-input" class="setname-input" placeholder="App (optional)"/></div><div class="setname-error hidden" id="setname-error"></div><button class="btn btn-export" id="export-page-btn">Export page (img_exp/)</button> <button class="btn btn-export" id="export-btn" disabled="disabled">No images on this page</button><div class="export-status hidden" id="export-status"></div></div></div><script>(()=>{"use strict";var e=Uint8Array,t=Uint16Array,n=Int32Array,r=new e([0,0,0,0,0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,0,0,0,0]),a=new e([0,0,0,0,1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11,12,12,13,13,0,0]),o=new e([16,17,18,0,8,7,9,6,10,5,11,4,12,3,13,2,14,1,15]),i=function(e,r){for(var a=new t(31),o=0;o<31;++o)a[o]=r+=1<<e[o-1];var i=new n(a[30]);for(o=1;o<30;++o)for(var s=a[o];s<a[o+1];++s)i[s]=s-a[o]<<5|o;return{b:a,r:i}},s=i(r,2),l=s.b,d=s.r;l[28]=258,d[258]=28;for(var c=i(a,0),u=(c.b,c.r),f=new t(32768),m=0;m<32768;++m){var v=(43690&m)>>1|(21845&m)<<1;v=(61680&(v=(52428&v)>>2|(13107&v)<<2))>>4|(3855&v)<<4,f[m]=((65280&v)>>8|(255&v)<<8)>>1}var g=function(e,n,r){for(var a=e.length,o=0,i=new t(n);o<a;++o)e[o]&&++i[e[o]-1];var s,l=new t(n);for(o=1;o<n;++o)l[o]=l[o-1]+i[o-1]<<1;if(r){s=new t(1<<n);var d=15-n;for(o=0;o<a;++o)if(e[o])for(var c=o<<4|e[o],u=n-e[o],m=l[e[o]-1]++<<u,v=m|(1<<u)-1;m<=v;++m)s[f[m]>>d]=c}else for(s=new t(a),o=0;o<a;++o)e[o]&&(s[o]=f[l[e[o]-1]++]>>15-e[o]);return s},h=new e(288);for(m=0;m<144;++m)h[m]=8;for(m=144;m<256;++m)h[m]=9;for(m=256;m<280;++m)h[m]=7;for(m=280;m<288;++m)h[m]=8;var p=new e(32);for(m=0;m<32;++m)p[m]=5;var w=g(h,9,0),y=g(p,5,0),x=function(e){return(e+7)/8|0},k=function(t,n,r){return(null==n||n<0)&&(n=0),(null==r||r>t.length)&&(r=t.length),new e(t.subarray(n,r))},E=["unexpected EOF","invalid block type","invalid length/literal","invalid distance","stream finished","no stream handler",,"no callback","invalid UTF-8 data","extra field too long","date not in range 1980-2099","filename too long","stream finishing","invalid zip data"],C=function(e,t,n){var r=new Error(t||E[e]);if(r.code=e,Error.captureStackTrace&&Error.captureStackTrace(r,C),!n)throw r;return r},b=function(e,t,n){n<<=7&t;var r=t/8|0;e[r]|=n,e[r+1]|=n>>8},L=function(e,t,n){n<<=7&t;var r=t/8|0;e[r]|=n,e[r+1]|=n>>8,e[r+2]|=n>>16},I=function(n,r){for(var a=[],o=0;o<n.length;++o)n[o]&&a.push({s:o,f:n[o]});var i=a.length,s=a.slice();if(!i)return{t:z,l:0};if(1==i){var l=new e(a[0].s+1);return l[a[0].s]=1,{t:l,l:1}}a.sort(function(e,t){return e.f-t.f}),a.push({s:-1,f:25001});var d=a[0],c=a[1],u=0,f=1,m=2;for(a[0]={s:-1,f:d.f+c.f,l:d,r:c};f!=i-1;)d=a[a[u].f<a[m].f?u++:m++],c=a[u!=f&&a[u].f<a[m].f?u++:m++],a[f++]={s:-1,f:d.f+c.f,l:d,r:c};var v=s[0].s;for(o=1;o<i;++o)s[o].s>v&&(v=s[o].s);var g=new t(v+1),h=M(a[f-1],g,0);if(h>r){o=0;var p=0,w=h-r,y=1<<w;for(s.sort(function(e,t){return g[t.s]-g[e.s]||e.f-t.f});o<i;++o){var x=s[o].s;if(!(g[x]>r))break;p+=y-(1<<h-g[x]),g[x]=r}for(p>>=w;p>0;){var k=s[o].s;g[k]<r?p-=1<<r-g[k]++-1:++o}for(;o>=0&&p;--o){var E=s[o].s;g[E]==r&&(--g[E],++p)}h=r}return{t:new e(g),l:h}},M=function(e,t,n){return-1==e.s?Math.max(M(e.l,t,n+1),M(e.r,t,n+1)):t[e.s]=n},N=function(e){for(var n=e.length;n&&!e[--n];);for(var r=new t(++n),a=0,o=e[0],i=1,s=function(e){r[a++]=e},l=1;l<=n;++l)if(e[l]==o&&l!=n)++i;else{if(!o&&i>2){for(;i>138;i-=138)s(32754);i>2&&(s(i>10?i-11<<5|28690:i-3<<5|12305),i=0)}else if(i>3){for(s(o),--i;i>6;i-=6)s(8304);i>2&&(s(i-3<<5|8208),i=0)}for(;i--;)s(o);i=1,o=e[l]}return{c:r.subarray(0,a),n}},B=function(e,t){for(var n=0,r=0;r<t.length;++r)n+=e[r]*t[r];return n},T=function(e,t,n){var r=n.length,a=x(t+2);e[a]=255&r,e[a+1]=r>>8,e[a+2]=255^e[a],e[a+3]=255^e[a+1];for(var o=0;o<r;++o)e[a+o+4]=n[o];return 8*(a+4+r)},A=function(e,n,i,s,l,d,c,u,f,m,v){b(n,v++,i),++l[256];for(var x=I(l,15),k=x.t,E=x.l,C=I(d,15),M=C.t,A=C.l,$=N(k),z=$.c,D=$.n,S=N(M),P=S.c,F=S.n,H=new t(19),q=0;q<z.length;++q)++H[31&z[q]];for(q=0;q<P.length;++q)++H[31&P[q]];for(var U=I(H,7),_=U.t,j=U.l,O=19;O>4&&!_[o[O-1]];--O);var Z,G,R,Y,J=m+5<<3,K=B(l,h)+B(d,p)+c,Q=B(l,k)+B(d,M)+c+14+3*O+B(H,_)+2*H[16]+3*H[17]+7*H[18];if(f>=0&&J<=K&&J<=Q)return T(n,v,e.subarray(f,f+m));if(b(n,v,1+(Q<K)),v+=2,Q<K){Z=g(k,E,0),G=k,R=g(M,A,0),Y=M;var V=g(_,j,0);for(b(n,v,D-257),b(n,v+5,F-1),b(n,v+10,O-4),v+=14,q=0;q<O;++q)b(n,v+3*q,_[o[q]]);v+=3*O;for(var W=[z,P],X=0;X<2;++X){var ee=W[X];for(q=0;q<ee.length;++q){var te=31&ee[q];b(n,v,V[te]),v+=_[te],te>15&&(b(n,v,ee[q]>>5&127),v+=ee[q]>>12)}}}else Z=w,G=h,R=y,Y=p;for(q=0;q<u;++q){var ne=s[q];if(ne>255){L(n,v,Z[257+(te=ne>>18&31)]),v+=G[te+257],te>7&&(b(n,v,ne>>23&31),v+=r[te]);var re=31&ne;L(n,v,R[re]),v+=Y[re],re>3&&(L(n,v,ne>>5&8191),v+=a[re])}else L(n,v,Z[ne]),v+=G[ne]}return L(n,v,Z[256]),v+G[256]},$=new n([65540,131080,131088,131104,262176,1048704,1048832,2114560,2117632]),z=new e(0),D=function(){for(var e=new Int32Array(256),t=0;t<256;++t){for(var n=t,r=9;--r;)n=(1&n&&-306674912)^n>>>1;e[t]=n}return e}(),S=function(){var e=-1;return{p:function(t){for(var n=e,r=0;r<t.length;++r)n=D[255&n^t[r]]^n>>>8;e=n},d:function(){return~e}}},P=function(o,i,s,l,c){if(!c&&(c={l:1},i.dictionary)){var f=i.dictionary.subarray(-32768),m=new e(f.length+o.length);m.set(f),m.set(o,f.length),o=m,c.w=f.length}return function(o,i,s,l,c,f){var m=f.z||o.length,v=new e(l+m+5*(1+Math.ceil(m/7e3))+c),g=v.subarray(l,v.length-c),h=f.l,p=7&(f.r||0);if(i){p&&(g[0]=f.r>>3);for(var w=$[i-1],y=w>>13,E=8191&w,C=(1<<s)-1,b=f.p||new t(32768),L=f.h||new t(C+1),I=Math.ceil(s/3),M=2*I,N=function(e){return(o[e]^o[e+1]<<I^o[e+2]<<M)&C},B=new n(25e3),z=new t(288),D=new t(32),S=0,P=0,F=f.i||0,H=0,q=f.w||0,U=0;F+2<m;++F){var _=N(F),j=32767&F,O=L[_];if(b[j]=O,L[_]=j,q<=F){var Z=m-F;if((S>7e3||H>24576)&&(Z>423||!h)){p=A(o,g,0,B,z,D,P,H,U,F-U,p),H=S=P=0,U=F;for(var G=0;G<286;++G)z[G]=0;for(G=0;G<30;++G)D[G]=0}var R=2,Y=0,J=E,K=j-O&32767;if(Z>2&&_==N(F-K))for(var Q=Math.min(y,Z)-1,V=Math.min(32767,F),W=Math.min(258,Z);K<=V&&--J&&j!=O;){if(o[F+R]==o[F+R-K]){for(var X=0;X<W&&o[F+X]==o[F+X-K];++X);if(X>R){if(R=X,Y=K,X>Q)break;var ee=Math.min(K,X-2),te=0;for(G=0;G<ee;++G){var ne=F-K+G&32767,re=ne-b[ne]&32767;re>te&&(te=re,O=ne)}}}K+=(j=O)-(O=b[j])&32767}if(Y){B[H++]=268435456|d[R]<<18|u[Y];var ae=31&d[R],oe=31&u[Y];P+=r[ae]+a[oe],++z[257+ae],++D[oe],q=F+R,++S}else B[H++]=o[F],++z[o[F]]}}for(F=Math.max(F,q);F<m;++F)B[H++]=o[F],++z[o[F]];p=A(o,g,h,B,z,D,P,H,U,F-U,p),h||(f.r=7&p|g[p/8|0]<<3,p-=7,f.h=L,f.p=b,f.i=F,f.w=q)}else{for(F=f.w||0;F<m+h;F+=65535){var ie=F+65535;ie>=m&&(g[p/8|0]=h,ie=m),p=T(g,p+1,o.subarray(F,ie))}f.i=m}return k(v,0,l+x(p)+c)}(o,null==i.level?6:i.level,null==i.mem?c.l?Math.ceil(1.5*Math.max(8,Math.min(13,Math.log(o.length)))):20:12+i.mem,s,l,c)},F=function(e,t){var n={};for(var r in e)n[r]=e[r];for(var r in t)n[r]=t[r];return n},H=function(e,t,n){for(;n;++t)e[t]=n,n>>>=8};function q(e,t){return P(e,t||{},0,0)}var U=function(t,n,r,a){for(var o in t){var i=t[o],s=n+o,l=a;Array.isArray(i)&&(l=F(a,i[1]),i=i[0]),i instanceof e?r[s]=[i,l]:(r[s+="/"]=[new e(0),l],U(i,s,r,a))}},_="undefined"!=typeof TextEncoder&&new TextEncoder,j="undefined"!=typeof TextDecoder&&new TextDecoder;try{j.decode(z,{stream:!0})}catch(e){}function O(t,n){if(n){for(var r=new e(t.length),a=0;a<t.length;++a)r[a]=t.charCodeAt(a);return r}if(_)return _.encode(t);var o=t.length,i=new e(t.length+(t.length>>1)),s=0,l=function(e){i[s++]=e};for(a=0;a<o;++a){if(s+5>i.length){var d=new e(s+8+(o-a<<1));d.set(i),i=d}var c=t.charCodeAt(a);c<128||n?l(c):c<2048?(l(192|c>>6),l(128|63&c)):c>55295&&c<57344?(l(240|(c=65536+(1047552&c)|1023&t.charCodeAt(++a))>>18),l(128|c>>12&63),l(128|c>>6&63),l(128|63&c)):(l(224|c>>12),l(128|c>>6&63),l(128|63&c))}return k(i,0,s)}var Z=function(e){var t=0;if(e)for(var n in e){var r=e[n].length;r>65535&&C(9),t+=r+4}return t},G=function(e,t,n,r,a,o,i,s){var l=r.length,d=n.extra,c=s&&s.length,u=Z(d);H(e,t,null!=i?33639248:67324752),t+=4,null!=i&&(e[t++]=20,e[t++]=n.os),e[t]=20,t+=2,e[t++]=n.flag<<1|(o<0&&8),e[t++]=a&&8,e[t++]=255&n.compression,e[t++]=n.compression>>8;var f=new Date(null==n.mtime?Date.now():n.mtime),m=f.getFullYear()-1980;if((m<0||m>119)&&C(10),H(e,t,m<<25|f.getMonth()+1<<21|f.getDate()<<16|f.getHours()<<11|f.getMinutes()<<5|f.getSeconds()>>1),t+=4,-1!=o&&(H(e,t,n.crc),H(e,t+4,o<0?-o-2:o),H(e,t+8,n.size)),H(e,t+12,l),H(e,t+14,u),t+=16,null!=i&&(H(e,t,c),H(e,t+6,n.attrs),H(e,t+10,i),t+=14),e.set(r,t),t+=l,u)for(var v in d){var g=d[v],h=g.length;H(e,t,+v),H(e,t+2,h),e.set(g,t+4),t+=4+h}return c&&(e.set(s,t),t+=c),t};"function"==typeof queueMicrotask?queueMicrotask:"function"==typeof setTimeout&&setTimeout;const R={};let Y={images:[],selectionCount:0,selectedNodeId:null,selectedLayerName:null,isMarked:!1,markedName:null,currentPageCount:0},J="",K=null;const Q=document.getElementById("no-selection"),V=document.getElementById("multi-selection"),W=document.getElementById("selection-content"),X=document.getElementById("layer-name"),ee=document.getElementById("image-name-input"),te=document.getElementById("mark-btn"),ne=document.getElementById("unmark-btn"),re=document.getElementById("selection-error"),ae=document.getElementById("list-title"),oe=document.getElementById("search-input"),ie=document.getElementById("image-list"),se=document.getElementById("empty-list"),le=document.getElementById("export-btn"),de=document.getElementById("export-page-btn"),ce=document.getElementById("export-status"),ue=document.getElementById("setname-input"),fe=document.getElementById("setname-error"),me=new Set(["class","struct","enum","func","var","let","extension","protocol","import","typealias","init","deinit","case","default","if","else","for","while","do","switch","return","break","continue","throw","throws","rethrows","try","catch","as","is","in","nil","true","false","self","Self","super","where","guard","defer","repeat","fallthrough","inout","private","public","internal","fileprivate","open","final","static","dynamic","lazy","weak","unowned","mutating","nonmutating","convenience","required","optional","indirect","infix","prefix","postfix","precedencegroup","associatedtype","subscript","operator","await","async","actor","any","some","Type","Protocol"]);function ve(e){return""===e?null:/^[A-Za-z_][A-Za-z0-9_]*$/.test(e)?me.has(e)?`"${e}" is a Swift reserved word`:null:"Must start with a letter or _, then letters/digits/_ only"}function ge(e){parent.postMessage({pluginMessage:e},"*")}function he(e){re.textContent=e,re.classList.remove("hidden")}function pe(){re.textContent="",re.classList.add("hidden")}function we(){const e=J.toLowerCase(),t=Y.images.filter(t=>t.name.toLowerCase().includes(e)),n=Y.images.length;if(ae.textContent="Images"+(n>0?` (${n})`:""),0===n)return ie.innerHTML="",ie.classList.add("hidden"),void se.classList.remove("hidden");if(se.classList.add("hidden"),ie.classList.remove("hidden"),0!==t.length){ie.innerHTML="";for(const e of t)ie.appendChild(ye(e))}else ie.innerHTML='<div class="hint">No results</div>'}function ye(e){const t=document.createElement("div");t.className="list-item",t.dataset.id=e.nodeId;const n=document.createElement("div");if(n.className="item-name-wrap",K===e.nodeId){const t=document.createElement("input");t.type="text",t.className="item-rename-input",t.value=e.name;let r=!1;const a=()=>{r||(r=!0,function(e,t){K=null;const n=t.trim();if(!n)return void we();const r=Y.images.find(t=>t.nodeId===e);r&&r.name===n?we():(r&&(r.name=n),we(),ge({type:"rename",nodeId:e,newName:n}))}(e.nodeId,t.value))};t.addEventListener("keydown",e=>{"Enter"===e.key&&(e.preventDefault(),a()),"Escape"===e.key&&(e.preventDefault(),K=null,we())}),t.addEventListener("blur",a),n.appendChild(t),requestAnimationFrame(()=>{t.focus(),t.select()})}else{const t=document.createElement("span");t.className="item-name",t.textContent=e.name,t.title="Click to rename",t.addEventListener("click",()=>{return t=e.nodeId,K=t,void we();var t}),n.appendChild(t)}const r=document.createElement("div");r.className="item-actions";const a=document.createElement("button");a.className="icon-btn",a.title="Scroll to layer",a.innerHTML='<svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">\n  <circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.4"/>\n  <circle cx="7" cy="7" r="1.5" fill="currentColor"/>\n  <line x1="7" y1="0.5" x2="7" y2="2.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>\n  <line x1="7" y1="11.8" x2="7" y2="13.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>\n  <line x1="0.5" y1="7" x2="2.2" y2="7" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>\n  <line x1="11.8" y1="7" x2="13.5" y2="7" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>\n</svg>',a.addEventListener("mousedown",e=>e.preventDefault()),a.addEventListener("click",()=>ge({type:"focus",nodeId:e.nodeId}));const o=document.createElement("button");return o.className="icon-btn danger",o.title="Remove from images",o.innerHTML='<svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">\n  <line x1="1.5" y1="1.5" x2="10.5" y2="10.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>\n  <line x1="10.5" y1="1.5" x2="1.5" y2="10.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>\n</svg>',o.addEventListener("mousedown",e=>e.preventDefault()),o.addEventListener("click",()=>ge({type:"unmark",nodeId:e.nodeId})),r.appendChild(a),r.appendChild(o),t.appendChild(n),t.appendChild(r),t}function xe(){const e=Y.currentPageCount;le.disabled=0===e,le.textContent=e>0?`Export ${e} image${1!==e?"s":""} from this page`:"No images on this page"}function ke(){for(const e of Object.keys(R))delete R[e]}function Ee(){xe();const e=null!==ve(ue.value.trim());le.disabled=0===Y.currentPageCount||e,de.disabled=e,de.textContent="Export page (img_exp/)"}function Ce(e,t){ce.classList.remove("hidden","success","warning","error"),ce.textContent=e,ce.classList.add(t)}window.onmessage=t=>{var n;const r=null===(n=t.data)||void 0===n?void 0:n.pluginMessage;var a;if(r)switch(r.type){case"state":Y=r,function(){pe();const{selectionCount:e,selectedLayerName:t,isMarked:n,markedName:r}=Y;Q.classList.toggle("hidden",0!==e),V.classList.toggle("hidden",e<=1),W.classList.toggle("hidden",1!==e),1===e&&(X.textContent=null!=t?t:"",n?(ee.value=null!=r?r:"",te.textContent="Update Name",ne.classList.remove("hidden")):(ee.value=null!=t?t:"",te.textContent="Mark as Image",ne.classList.add("hidden")))}(),we(),xe();break;case"exportFile":R[r.fileName]=new Uint8Array(r.bytes);break;case"exportDone":!function(t,n,r,a){if("page"===r||t>0){const t=function(t,n){n||(n={});var r={},a=[];U(t,"",r,n);var o=0,i=0;for(var s in r){var l=r[s],d=l[0],c=l[1],u=0==c.level?0:8,f=(L=O(s)).length,m=c.comment,v=m&&O(m),g=v&&v.length,h=Z(c.extra);f>65535&&C(11);var p=u?q(d,c):d,w=p.length,y=S();y.p(d),a.push(F(c,{size:d.length,crc:y.d(),c:p,f:L,m:v,u:f!=s.length||v&&m.length!=g,o,compression:u})),o+=30+f+h+w,i+=76+2*(f+h)+(g||0)+w}for(var x=new e(i+22),k=o,E=i-o,b=0;b<a.length;++b){var L=a[b];G(x,L.o,L,L.f,L.u,L.c.length);var I=30+L.f.length+Z(L.extra);x.set(L.c,L.o+I),G(x,o,L,L.f,L.u,L.c.length,L.o,L.m),o+=16+I+(L.m?L.m.length:0)}return function(e,t,n,r,a){H(e,t,101010256),H(e,t+8,n),H(e,t+10,n),H(e,t+12,r),H(e,t+16,a)}(x,o,a.length,E,k),x}(R,{level:0});!function(e){let t="";for(let n=0;n<e.length;n++)t+=String.fromCharCode(e[n]);const n=`data:application/zip;base64,${btoa(t)}`,r=document.createElement("a");r.href=n,r.download="images.zip",document.body.appendChild(r),r.click(),document.body.removeChild(r)}(t)}if(ke(),Ee(),n>0)return Ce(`Done — ${t} exported, ${n} failed`,"warning"),void setTimeout(()=>ce.classList.add("hidden"),4e3);a.length>0?Ce([`${t} image${1!==t?"s":""} saved, but ${a.length} required size correction:`,...a,"","Cause: the source layer has non-integer width/height (e.g. 24.5×24), so","Figma's 1x and 2x exports round differently. Snap the layer to integer","pixels — auto-correction adds a costly PNG re-encode and slows the export."].join("\n"),"warning"):(Ce(`${t} image${1!==t?"s":""} saved as images.zip`,"success"),setTimeout(()=>ce.classList.add("hidden"),4e3))}(r.exported,r.failed,r.mode,r.retinaFixes);break;case"exportError":a=r.message,ke(),Ee(),Ce(a,"error");break;case"error":he(r.message)}},te.addEventListener("click",()=>{const e=ee.value.trim();e?Y.isMarked&&Y.selectedNodeId?ge({type:"rename",nodeId:Y.selectedNodeId,newName:e}):ge({type:"mark",name:e}):he("Please enter an image name")}),ne.addEventListener("click",()=>{Y.selectedNodeId&&ge({type:"unmark",nodeId:Y.selectedNodeId})}),ee.addEventListener("input",pe),oe.addEventListener("input",()=>{J=oe.value,we()}),le.addEventListener("click",()=>{const e=ue.value.trim();null===ve(e)&&(ke(),le.disabled=!0,le.textContent="Exporting…",de.disabled=!0,ce.classList.add("hidden"),ge({type:"export",setName:e}))}),de.addEventListener("click",()=>{const e=ue.value.trim();null===ve(e)&&(ke(),de.disabled=!0,de.textContent="Exporting…",le.disabled=!0,ce.classList.add("hidden"),ge({type:"exportPage",setName:e}))}),ue.addEventListener("input",function(){const e=ve(ue.value.trim());e?(ue.classList.add("invalid"),fe.textContent=e,fe.classList.remove("hidden")):(ue.classList.remove("invalid"),fe.textContent="",fe.classList.add("hidden"));const t=null!==e;le.disabled=0===Y.currentPageCount||t,de.disabled=t}),ge({type:"getState"})})();</script></body></html>
