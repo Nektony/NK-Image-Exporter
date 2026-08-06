@@ -1,6 +1,8 @@
-# NK Image Exporter
+# Nektony Image Exporter
 
 Figma plugin that batch-exports tagged layers as Xcode-ready `.imageset` assets — with automatic dark mode support.
+Maintained by [Nektony](https://nektony.com) — macOS utilities team. 
+Built for our own design workflow, open-sourced for anyone who needs the same Figma → Xcode pipeline.
 
 ## What it does
 
